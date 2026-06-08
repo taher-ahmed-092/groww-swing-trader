@@ -1,8 +1,36 @@
-.venv/
-__pycache__/
-*.pyc
+# Environment — never commit
 .env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# uv
+.python-version
+
+# Data & logs (local only, can be large)
 data/
 logs/
-.DS_Store
+
+# Kill switch (presence triggers halt)
 KILL_SWITCH
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local tooling / IDE state
+.claude/
