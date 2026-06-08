@@ -1,0 +1,13 @@
+langgraph
+langchain
+langchain-anthropic
+growwapi
+pandas
+numpy
+ta
+yfinance
+backtesting
+pydantic
+python-dotenv
+sqlmodel
+rich
