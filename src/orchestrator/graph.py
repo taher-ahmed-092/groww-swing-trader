@@ -25,10 +25,12 @@ from config.risk_limits import LIMITS
 from config.settings import settings
 from src.agents.executor.agent import ExecutorAgent
 from src.agents.fundamental.agent import FundamentalAgent
+from src.agents.gut_check import GutCheckAgent
 from src.agents.scout.agent import WATCHLIST, ScoutAgent
 from src.agents.technical.agent import TechnicalAgent
 from src.analytics.performance import PerformanceAnalyzer
 from src.data.market_context import MarketContext
+from src.data.regime_detector import RegimeDetector
 from src.judge.evaluator import LLMJudge
 from src.memory.journal import TradingJournal
 from src.memory.lessons import LessonsRetriever
@@ -64,10 +66,19 @@ def kill_switch_guard(node_fn):
 @kill_switch_guard
 def market_context_node(state: TradeState) -> dict:
     ctx = MarketContext().get_nifty_context()
+    # Enrich with the market regime + its position-size multiplier.
+    try:
+        regime = RegimeDetector().detect()
+        ctx["regime"] = regime.get("regime")
+        ctx["regime_strategy"] = regime.get("strategy")
+        ctx["size_multiplier"] = regime.get("size_multiplier", 1.0)
+    except Exception as exc:
+        console.print(f"[yellow][MARKET] regime detection failed: {exc}[/yellow]")
+        ctx.setdefault("size_multiplier", 1.0)
     update: dict = {"market_context": ctx, "current_step": "market_context"}
     if not ctx.get("market_safe_to_buy"):
         # Don't block here — the judge factors the downtrend in (and can veto).
-        console.print(f"[yellow][MARKET] {ctx.get('context_summary')}[/yellow]")
+        console.print(f"[yellow][MARKET] {ctx.get('context_summary')} | regime={ctx.get('regime')}[/yellow]")
     return update
 
 
@@ -114,7 +125,17 @@ def fundamental_node(state: TradeState) -> dict:
 @kill_switch_guard
 def technical_node(state: TradeState) -> dict:
     verdict = TechnicalAgent().analyze(state)
-    return {"technical_verdict": verdict, "current_step": "technical"}
+    return {
+        "technical_verdict": verdict,
+        "entry_recommendation": verdict.get("entry_recommendation", {}),
+        "current_step": "technical",
+    }
+
+
+@kill_switch_guard
+def gut_check_node(state: TradeState) -> dict:
+    gut = GutCheckAgent().check(state)
+    return {"gut_check": gut, "current_step": "gut_check"}
 
 
 @kill_switch_guard
@@ -126,7 +147,11 @@ def judge_node(state: TradeState) -> dict:
 @kill_switch_guard
 def risk_node(state: TradeState) -> dict:
     result = RiskChecker().check(state)
-    update: dict = {"risk_check": result, "current_step": "risk"}
+    update: dict = {
+        "risk_check": result,
+        "sizing_details": result.get("sizing_details", {}),
+        "current_step": "risk",
+    }
 
     if result.get("approved"):
         tech = state.get("technical_verdict", {})
@@ -222,6 +247,7 @@ def build_graph() -> StateGraph:
     graph.add_node("scout_node", scout_node)
     graph.add_node("fundamental_node", fundamental_node)
     graph.add_node("technical_node", technical_node)
+    graph.add_node("gut_check_node", gut_check_node)
     graph.add_node("judge_node", judge_node)
     graph.add_node("risk_node", risk_node)
     graph.add_node("executor_node", executor_node)
@@ -236,7 +262,8 @@ def build_graph() -> StateGraph:
         ("lessons_node", "scout_node"),
         ("scout_node", "fundamental_node"),
         ("fundamental_node", "technical_node"),
-        ("technical_node", "judge_node"),
+        ("technical_node", "gut_check_node"),
+        ("gut_check_node", "judge_node"),
         ("judge_node", "risk_node"),
         ("risk_node", "executor_node"),
         ("executor_node", "reflection_node"),

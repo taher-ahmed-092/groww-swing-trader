@@ -24,6 +24,9 @@ class TradeState(TypedDict, total=False):
     sentiment: dict                  # from SocialSentimentAgent (inside FundamentalAgent)
     knowledge_context: str           # from KnowledgeBase, injected once per run
     thread_id: str                   # LangGraph thread_id, for journal traceability
+    entry_recommendation: dict       # from recommend_entry() in TechnicalAgent
+    gut_check: dict                  # from GutCheckAgent (holistic assessment)
+    sizing_details: dict             # from PositionSizer (Kelly/confidence/regime)
 
 
 def get_initial_state(symbol: str) -> TradeState:
@@ -47,4 +50,7 @@ def get_initial_state(symbol: str) -> TradeState:
         sentiment={},
         knowledge_context="",
         thread_id="",
+        entry_recommendation={},
+        gut_check={},
+        sizing_details={},
     )

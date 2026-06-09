@@ -12,12 +12,15 @@ from rich.console import Console
 
 from config.risk_limits import LIMITS
 from config.settings import settings
+from src.agents.technical.entry_price import recommend_entry
 from src.agents.technical.indicators import compute_indicators
+from src.agents.technical.rule_score import rule_based_technical_score
 from src.data.fetcher import MarketDataFetcher
 from src.data.market_context import MarketContext
 from src.llm import get_llm, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
+from src.tracking.signal_tracker import SignalTracker
 
 console = Console()
 
@@ -78,6 +81,7 @@ class TechnicalAgent:
         stop_price, target_price = self._levels(entry_price, indicators)
         weekly_trend = self._weekly_trend(symbol)
         market_context = state.get("market_context") or self.market.get_nifty_context()
+        entry_recommendation = recommend_entry(indicators, entry_price)
 
         flags: list[str] = []
         if indicators.get("adx_signal") == "CHOPPY":
@@ -89,6 +93,7 @@ class TechnicalAgent:
             "target_price": target_price,
             "indicators": indicators,
             "weekly_trend": weekly_trend,
+            "entry_recommendation": entry_recommendation,
             "flags": flags,
         }
 
@@ -107,21 +112,19 @@ class TechnicalAgent:
                 )
             return verdict
 
-        if not settings.has_anthropic_key:
-            verdict = {
-                **base,
-                "score": 0.5, "signal": "HOLD", "patterns": [], "proceed": True,
-                "reasoning": "MOCK — no ANTHROPIC_API_KEY; indicators computed but not interpreted.",
-            }
-            verdict["flags"] = list(flags)
+        if settings.effective_demo_mode:
+            # DEMO: deterministic rule-based signal (no LLM).
+            verdict = rule_based_technical_score(indicators, entry_price, stop_price, target_price)
+            verdict.update(base)
             return _enforce_weekly(verdict)
 
         fundamental = state.get("fundamental_verdict", {})
-        # Context blocks A (knowledge) + B (lessons) + C (recent RCAs).
+        # Context blocks A (knowledge) + B (lessons) + C (recent RCAs) + signal accuracy.
         sector = state.get("sector")
         knowledge_context = state.get("knowledge_context") or ""
         lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, sector)
         rca_context = self.lessons.get_recent_rca_context(symbol, sector)
+        signal_context = SignalTracker().get_best_signals(sector)
         system = _SYSTEM
         blocks = []
         if knowledge_context:
@@ -130,6 +133,8 @@ class TechnicalAgent:
             blocks.append(f"What the system has learned:\n{lessons}")
         if rca_context:
             blocks.append(rca_context)
+        if signal_context:
+            blocks.append(signal_context)
         if blocks:
             system = _SYSTEM + "\n\n" + "\n\n".join(blocks)
 

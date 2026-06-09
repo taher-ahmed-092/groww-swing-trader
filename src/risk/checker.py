@@ -14,6 +14,7 @@ from rich.console import Console
 
 from config.risk_limits import LIMITS
 from src.orchestrator.state import TradeState
+from src.risk.position_sizer import PositionSizer
 
 console = Console()
 
@@ -75,26 +76,35 @@ class RiskChecker:
                 f"open positions {self.open_positions} >= max {LIMITS.max_open_positions}"
             )
 
-        # 6. Position sizing.
+        # 6. Gut-check gate — a holistic veto beyond the checklist.
+        gut = state.get("gut_check", {}) or {}
+        gut_score = gut.get("gut_score", 5.0)
+        if gut_score < 3.0:
+            reasons.append(
+                "Gut check: strong NO — "
+                + (gut.get("override_reason") or gut.get("gut_reasoning", "low conviction"))
+            )
+        elif gut.get("modifies_decision") and gut_score < 4.0:
+            reasons.append("Gut override: " + (gut.get("override_reason") or "gut vetoed"))
+
+        # 7. Valid entry price required before sizing.
         entry_price = technical.get("entry_price")
         if not entry_price or (isinstance(entry_price, float) and math.isnan(entry_price)):
             reasons.append("no valid entry_price — cannot size position.")
             return self._reject(reasons)
 
-        quantity = math.floor(LIMITS.default_trade_value_inr / entry_price)
-        if quantity < 1:
-            reasons.append(
-                f"entry_price {entry_price} too high for trade value "
-                f"{LIMITS.default_trade_value_inr} — quantity < 1."
-            )
-
-        # If anything has failed up to here, reject before risk math.
         if reasons:
             return self._reject(reasons)
 
-        position_size_inr = round(quantity * entry_price, 4)
+        # 8. Dynamic position sizing (Kelly × confidence × regime).
+        sizing = PositionSizer().calculate(state, self.portfolio_value_inr)
+        quantity = sizing["quantity"]
+        position_size_inr = sizing["position_size_inr"]
+        if quantity < 1:
+            reasons.append("dynamic sizing produced < 1 share — entry price too high for capital.")
+            return self._reject(reasons)
 
-        # 7. Portfolio risk cap.
+        # 9. Portfolio risk cap (on the actual deployed quantity).
         risk_inr = round(quantity * entry_price * (LIMITS.stop_loss_pct / 100), 4)
         max_risk_inr = self.portfolio_value_inr * (LIMITS.max_risk_per_trade_pct / 100)
         if risk_inr > max_risk_inr:
@@ -110,4 +120,10 @@ class RiskChecker:
             "position_size_inr": position_size_inr,
             "quantity": quantity,
             "risk_inr": risk_inr,
+            "kelly_fraction": sizing["kelly_fraction"],
+            "win_rate_used": sizing["win_rate_used"],
+            "confidence_multiplier": sizing["confidence_multiplier"],
+            "confidence_tier": sizing["confidence_tier"],
+            "sizing_explanation": sizing["sizing_explanation"],
+            "sizing_details": sizing,
         }

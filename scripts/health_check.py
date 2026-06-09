@@ -50,6 +50,20 @@ KEY_MODULES = [
     "src.notifications.telegram_bot",
     "src.analytics.performance",
     "src.agents.sentiment.agent",
+    "src.agents.fundamental.rule_score",
+    "src.agents.technical.rule_score",
+    "src.agents.technical.entry_price",
+    "src.agents.gut_check",
+    "src.risk.position_sizer",
+    "src.risk.tiered_stops",
+    "src.data.regime_detector",
+    "src.tracking.signal_tracker",
+    "src.evaluation.agent_evaluator",
+    "src.agents.meta.workflow_enhancer",
+    "src.utils.adaptive",
+    "src.utils.tips",
+    "src.utils.display",
+    "src.utils.summarizer",
 ]
 
 

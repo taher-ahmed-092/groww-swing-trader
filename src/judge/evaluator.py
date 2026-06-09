@@ -15,6 +15,7 @@ from src.data.market_context import MarketContext
 from src.llm import get_judge_llm, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
+from src.utils.adaptive import get_adaptive_params
 
 console = Console()
 
@@ -90,17 +91,22 @@ class LLMJudge:
                 "flags": veto,
             }
 
-        if not settings.has_anthropic_key:
-            flags = ["NO_API_KEY"]
+        threshold = get_adaptive_params().get("judge_approval_threshold", APPROVAL_THRESHOLD)
+
+        if settings.effective_demo_mode:
+            fund = fundamental.get("score", 0) or 0
+            tech = technical.get("score", 0) or 0
+            overall = round((fund * 0.5 + tech * 0.5) * 10, 2)
+            flags = ["DEMO_MODE"]
             if manually_requested:
                 flags.append("MANUALLY_REQUESTED")
             return {
-                "approved": True,
-                "score": 0.5,
-                "overall_score": 5.0,
+                "approved": overall >= 6.0,
+                "score": round(overall / 10, 4),
+                "overall_score": overall,
                 "dimension_scores": {},
-                "reasoning": "MOCK — no API key",
-                "one_line_verdict": "Mock approval (no API key).",
+                "reasoning": f"Rule-based {fund:.2f}/{tech:.2f}",
+                "one_line_verdict": "DEMO",
                 "flags": flags,
             }
 
@@ -174,5 +180,5 @@ class LLMJudge:
         verdict["flags"] = flags
         verdict["overall_score"] = round(overall, 4)
         verdict["score"] = round(overall / 10, 4)  # 0-1 for journal/back-compat
-        verdict["approved"] = bool(overall >= APPROVAL_THRESHOLD)
+        verdict["approved"] = bool(overall >= threshold)
         return verdict

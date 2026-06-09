@@ -94,7 +94,7 @@ class DailySynthesizer:
         patterns = sorted({c.signal for c in proposed if c.signal})
         lessons = rca_lessons
 
-        if settings.has_anthropic_key:
+        if settings.has_anthropic_key and not settings.effective_demo_mode:
             closed_brief = [
                 {"symbol": t.symbol, "outcome": t.outcome, "pnl_pct": t.pnl_pct}
                 for t in closed

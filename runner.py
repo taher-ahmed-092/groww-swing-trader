@@ -25,12 +25,14 @@ from config.risk_limits import LIMITS
 from config.settings import settings
 from src.agents.executor.agent import ExecutorAgent
 from src.agents.fundamental.agent import FundamentalAgent
+from src.agents.meta.workflow_enhancer import WorkflowEnhancer
 from src.agents.scout.agent import ScoutAgent
 from src.agents.technical.agent import TechnicalAgent
 from src.analytics.performance import PerformanceAnalyzer
 from src.data.fetcher import MarketDataFetcher
 from src.data.market_context import MarketContext
 from src.data.screener import ScreenerScraper
+from src.evaluation.agent_evaluator import AgentEvaluator
 from src.judge.evaluator import LLMJudge
 from src.memory.daily_synthesis import DailySynthesizer
 from src.memory.journal import TradeRecord, TradingJournal
@@ -245,13 +247,59 @@ def weekly_distillation_job() -> None:
     _run_weekly_distillation_once()  # sends the Telegram learning summary internally
 
 
+def weekly_agent_evaluation_job() -> None:
+    """Sunday 8:30 PM — measure agent accuracy + run the self-improvement enhancer."""
+    if _kill_switch():
+        return
+    console.print("[cyan][JOB] weekly_agent_evaluation_job starting[/cyan]")
+    notifier = TelegramNotifier()
+
+    results = AgentEvaluator().evaluate_all()
+    suggestions = AgentEvaluator().generate_improvement_suggestions(results)
+
+    # Append to the evaluation history.
+    eval_file = os.path.join("data", "journal", "agent_evaluations.json")
+    try:
+        os.makedirs(os.path.dirname(eval_file), exist_ok=True)
+        history = []
+        if os.path.exists(eval_file):
+            with open(eval_file, encoding="utf-8") as f:
+                history = json.load(f)
+        history.append(results)
+        with open(eval_file, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, default=str)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    fund = results.get("fundamental", {})
+    tech = results.get("technical", {})
+    judge = results.get("judge", {})
+    top = suggestions[0] if suggestions else "All agents performing well!"
+    notifier.send_message(
+        "📊 WEEKLY AGENT EVALUATION\n"
+        f"🧠 Fundamental: r={fund.get('score_correlation', 'N/A')}\n"
+        f"🔧 Technical: BUY win rate {tech.get('buy_signal_win_rate', 'N/A')}\n"
+        f"🧑‍⚖️ Judge calibration error: {judge.get('avg_calibration_error', 'N/A')}\n\n"
+        f"💡 TOP SUGGESTION:\n{top}"
+    )
+
+    # Self-improvement: the enhancer auto-applies safe parameter changes.
+    enhancer = WorkflowEnhancer().run(results)
+    applied = enhancer["auto_applied"]
+    if applied:
+        changes = "\n".join(f"• {a['param']}: {a['old_value']} → {a['new_value']}" for a in applied)
+        notifier.send_message(f"🔧 SYSTEM ENHANCEMENT — auto-applied:\n{changes}\nThe system is getting smarter. 🧠")
+    else:
+        notifier.send_message("🔧 SYSTEM ENHANCEMENT — no auto-changes this week. 📱 Review suggestions in /enhance.")
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     console.print(f"[bold green]🚀 groww-swing-trader running | Mode: {settings.broker_mode}[/bold green]")
     console.print(
         "[green]Scheduler active. Jobs: weekly scan (Sun 7pm), daily check (Mon-Fri 9am), "
         "postmarket (Mon-Fri 4pm), daily learning (Mon-Fri 4:30pm), "
-        "weekly distillation (Sun 8pm)[/green]"
+        "weekly distillation (Sun 8pm), agent evaluation + enhancer (Sun 8:30pm)[/green]"
     )
     console.print("[green]Press Ctrl+C to stop. KILL_SWITCH file halts all jobs immediately.[/green]")
 
@@ -261,6 +309,7 @@ if __name__ == "__main__":
     scheduler.add_job(daily_learning_job, "cron", day_of_week="mon-fri", hour=16, minute=30)
     scheduler.add_job(daily_postmarket_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
     scheduler.add_job(weekly_distillation_job, "cron", day_of_week="sun", hour=20, minute=0)
+    scheduler.add_job(weekly_agent_evaluation_job, "cron", day_of_week="sun", hour=20, minute=30)
     scheduler.start()
 
     try:

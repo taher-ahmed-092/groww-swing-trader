@@ -12,6 +12,7 @@ from rich.console import Console
 
 from config.settings import settings
 from src.agents.fundamental.ratios import compute_ratios
+from src.agents.fundamental.rule_score import rule_based_fundamental_score
 from src.agents.sentiment.agent import SocialSentimentAgent
 from src.data.fetcher import MarketDataFetcher
 from src.data.screener import ScreenerScraper
@@ -156,13 +157,10 @@ class FundamentalAgent:
             "data": data,
         }
 
-        if not settings.has_anthropic_key:
-            verdict = {
-                "score": 0.5, "strengths": [], "weaknesses": [], "swot": {},
-                "moat": "unknown", "moat_strength": "UNKNOWN", "proceed": True,
-                "reasoning": "MOCK — no ANTHROPIC_API_KEY; numbers computed but not interpreted.",
-                **base_extra,
-            }
+        if settings.effective_demo_mode:
+            # DEMO: deterministic rule-based score (no LLM), still sentiment-aware.
+            verdict = rule_based_fundamental_score(data, {})
+            verdict.update(base_extra)
             return self._apply_sentiment(verdict, sentiment)
 
         # Context blocks injected at the TOP of the prompt (before stock-specific data).

@@ -26,6 +26,7 @@ from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
 from src.memory.journal import TradingJournal
 from src.memory.lessons import LessonsRetriever
+from src.utils.adaptive import get_adaptive_params
 
 console = Console()
 
@@ -204,7 +205,8 @@ class ScoutAgent:
         return "neutral"
 
     def _score_symbol(
-        self, symbol: str, nifty_1m: float | None, nifty_20d: float | None, fii_dii: dict
+        self, symbol: str, nifty_1m: float | None, nifty_20d: float | None,
+        fii_dii: dict, params: dict,
     ) -> dict | None:
         df = self.fetcher.get_price_history(symbol, period="1y")
         if df is None or df.empty:
@@ -217,21 +219,30 @@ class ScoutAgent:
         year_low = float(df["Low"].min())
         vr = ind["volume_ratio"]
 
+        rsi_low = params.get("scout_rsi_low", 50)
+        rsi_high = params.get("scout_rsi_high", 65)
+        adx_threshold = params.get("scout_adx_threshold", 20)
+
         score = 0
         reasons: list[str] = []
         flags: list[str] = []
 
-        # 1. Momentum (0-3).
+        # 1. Momentum (0-3) — RSI bounds are adaptive (tuned by the enhancer).
         rsi = ind["rsi_14"]
         if rsi is not None:
-            if 50 <= rsi <= 65:
+            if rsi_low <= rsi <= rsi_high:
                 score += 2
-                reasons.append(f"RSI {rsi} momentum zone")
-            elif 40 <= rsi < 50:
+                reasons.append(f"RSI {rsi} momentum zone [{rsi_low}-{rsi_high}]")
+            elif (rsi_low - 10) <= rsi < rsi_low:
                 score += 1
                 reasons.append(f"RSI {rsi} building")
             elif rsi > 70 or rsi < 30:
                 flags.append("rsi_extreme")
+
+        # Low-ADX (choppy) advisory using the adaptive threshold.
+        adx = ind.get("adx_14")
+        if adx is not None and adx < adx_threshold:
+            flags.append("low_adx")
 
         # 2. Trend (0-3) + 52W breakout / falling-knife adjustment.
         ma50, ma200 = ind["ma_50"], ind["ma_200"]
@@ -314,12 +325,13 @@ class ScoutAgent:
 
         nifty_1m, nifty_20d = self._nifty_returns()
         fii_dii = self._get_fii_dii_data()
+        params = get_adaptive_params()
 
         symbols = [s for s in WATCHLIST if not sectors or WATCHLIST[s]["sector"] in sectors]
 
         scored: list[dict] = []
         for symbol in symbols:
-            candidate = self._score_symbol(symbol, nifty_1m, nifty_20d, fii_dii)
+            candidate = self._score_symbol(symbol, nifty_1m, nifty_20d, fii_dii, params)
             if candidate is not None:
                 scored.append(candidate)
 

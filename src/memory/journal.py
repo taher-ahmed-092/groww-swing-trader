@@ -49,6 +49,13 @@ class TradeRecord(SQLModel, table=True):
     # Compact JSON of the entry-time verdicts — drives Root Cause Analysis reliably
     # without needing to reconstruct the full state from the checkpointer.
     state_snapshot: Optional[str] = None
+    # Tiered-stop progression (updated as the trade is held).
+    current_stop: Optional[float] = None
+    partial_exited: bool = False
+    partial_exit_price: Optional[float] = None
+    partial_exit_pnl: Optional[float] = None
+    # Rough API cost attributed to this trade's analysis (INR).
+    api_cost_estimate_inr: Optional[float] = None
 
 
 class DailyJournalEntry(SQLModel, table=True):
@@ -133,6 +140,7 @@ class TradingJournal:
             judge_flags=json.dumps(judge.get("flags", [])),
             thread_id=state.get("thread_id"),
             state_snapshot=json.dumps(snapshot, default=str),
+            current_stop=tech.get("stop_price"),
             outcome="OPEN",
         )
         with Session(self.engine) as session:
@@ -166,6 +174,28 @@ class TradingJournal:
             record.pnl_pct = round((qty_value / entry) * 100, 4) if entry else None
             record.outcome = "WIN" if qty_value > 0 else "LOSS"
             record.closed_at = _now()
+            session.add(record)
+            session.commit()
+            session.refresh(record)
+        return record
+
+    def update_position(self, trade_id: int, *, current_stop: Optional[float] = None,
+                        partial_exited: Optional[bool] = None,
+                        partial_exit_price: Optional[float] = None,
+                        partial_exit_pnl: Optional[float] = None) -> TradeRecord:
+        """Update tiered-stop progression fields on a held position."""
+        with Session(self.engine) as session:
+            record = session.get(TradeRecord, trade_id)
+            if record is None:
+                raise ValueError(f"No TradeRecord with id={trade_id}")
+            if current_stop is not None:
+                record.current_stop = current_stop
+            if partial_exited is not None:
+                record.partial_exited = partial_exited
+            if partial_exit_price is not None:
+                record.partial_exit_price = partial_exit_price
+            if partial_exit_pnl is not None:
+                record.partial_exit_pnl = partial_exit_pnl
             session.add(record)
             session.commit()
             session.refresh(record)
@@ -293,6 +323,49 @@ class TradingJournal:
                 f"— seen {e.observed_count}x{tag}"
             )
         return "\n".join(lines)
+
+    def get_performance_summary(self) -> dict:
+        """Aggregate stats over closed trades (drives Kelly sizing & dashboards)."""
+        with Session(self.engine) as session:
+            stmt = (
+                select(TradeRecord)
+                .where(TradeRecord.outcome != "OPEN")
+                .order_by(TradeRecord.id.asc())
+            )
+            closed = list(session.exec(stmt).all())
+
+        total = len(closed)
+        if total == 0:
+            return {
+                "total_closed": 0, "win_rate": 0.0, "avg_win_pct": 0.0,
+                "avg_loss_pct": 0.0, "consecutive_wins": 0, "consecutive_losses": 0,
+            }
+
+        wins = [t for t in closed if t.outcome == "WIN"]
+        losses = [t for t in closed if t.outcome == "LOSS"]
+
+        def _avg(rows):
+            vals = [r.pnl_pct for r in rows if r.pnl_pct is not None]
+            return round(sum(vals) / len(vals), 4) if vals else 0.0
+
+        # Current streaks (walk back from most recent).
+        cons_wins = cons_losses = 0
+        for t in reversed(closed):
+            if t.outcome == "WIN" and cons_losses == 0:
+                cons_wins += 1
+            elif t.outcome == "LOSS" and cons_wins == 0:
+                cons_losses += 1
+            else:
+                break
+
+        return {
+            "total_closed": total,
+            "win_rate": round(len(wins) / total, 4),
+            "avg_win_pct": _avg(wins),
+            "avg_loss_pct": _avg(losses),
+            "consecutive_wins": cons_wins,
+            "consecutive_losses": cons_losses,
+        }
 
     # ── reads ────────────────────────────────────────────────────────────────
     def get_recent(self, n: int = 10) -> list[TradeRecord]:

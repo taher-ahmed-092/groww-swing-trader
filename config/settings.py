@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     # Feature flags
     live_trading_enabled: bool = Field(default=False)
+    paper_demo_mode: bool = Field(default=False)
 
     # Overrideable defaults (fall back to risk_limits.py if not set)
     max_trade_value_inr: float = Field(default=500.0)
@@ -55,6 +56,20 @@ class Settings(BaseSettings):
         if self.live_trading_enabled and self.has_groww_credentials:
             return "live"
         return "paper"
+
+    @property
+    def effective_demo_mode(self) -> bool:
+        if self.live_trading_enabled:
+            return False
+        return self.paper_demo_mode or not self.has_anthropic_key
+
+    @property
+    def mode_label(self) -> str:
+        if self.live_trading_enabled:
+            return "🔴 LIVE"
+        if self.effective_demo_mode:
+            return "🧪 DEMO"
+        return "📝 PAPER"
 
 
 settings = Settings()

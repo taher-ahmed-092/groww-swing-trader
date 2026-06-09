@@ -1,0 +1,19 @@
+[Unit]
+Description=groww-swing-trader scheduler (paper-first AI swing trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__APP_DIR__
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__HOME__/.local/bin/uv run python runner.py
+Restart=on-failure
+RestartSec=30
+# Graceful stop so the scheduler shuts down cleanly.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
