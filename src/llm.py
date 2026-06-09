@@ -1,8 +1,9 @@
 """
 Shared LLM helpers.
 
-The model string lives ONLY in config.settings.llm_model — never hardcode it here
-or anywhere else. LLMs interpret and reason; they never compute numbers (CLAUDE.md rule 4).
+Model strings live ONLY in config.settings (llm_model_default / llm_model_judge) —
+never hardcode them here or anywhere else. LLMs interpret and reason; they never
+compute numbers (CLAUDE.md rule 4).
 """
 from __future__ import annotations
 
@@ -11,16 +12,26 @@ import json
 from config.settings import settings
 
 
-def get_llm(temperature: float = 0):
-    """Return a configured ChatAnthropic client. Import is local so paper mode
-    works even if langchain_anthropic has issues, as callers guard on the key."""
+def _build_llm(model: str, temperature: float):
+    # Import is local so paper mode works even if langchain_anthropic has issues;
+    # callers guard on the API key anyway.
     from langchain_anthropic import ChatAnthropic
 
     return ChatAnthropic(
-        model=settings.llm_model,
+        model=model,
         temperature=temperature,
         api_key=settings.anthropic_api_key,
     )
+
+
+def get_llm(temperature: float = 0):
+    """Default (cheap/fast) model for the research agents."""
+    return _build_llm(settings.llm_model_default, temperature)
+
+
+def get_judge_llm(temperature: float = 0):
+    """Stronger model reserved for the capital-protecting judge."""
+    return _build_llm(settings.llm_model_judge, temperature)
 
 
 def parse_json_response(content: str) -> dict:

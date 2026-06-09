@@ -12,7 +12,7 @@ from rich.console import Console
 
 from config.settings import settings
 from src.data.market_context import MarketContext
-from src.llm import get_llm, parse_json_response
+from src.llm import get_judge_llm, parse_json_response
 from src.orchestrator.state import TradeState
 
 console = Console()
@@ -131,7 +131,7 @@ class LLMJudge:
         )
 
         try:
-            resp = get_llm(temperature=0).invoke([("system", _SYSTEM), ("human", prompt)])
+            resp = get_judge_llm(temperature=0).invoke([("system", _SYSTEM), ("human", prompt)])
             verdict = parse_json_response(getattr(resp, "content", "") or "")
         except Exception as exc:
             console.print(f"[yellow]Judge LLM call failed: {exc}[/yellow]")

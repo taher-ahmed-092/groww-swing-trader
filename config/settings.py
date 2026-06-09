@@ -9,10 +9,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM
+    # LLM — tiered model routing. Single source of truth for model strings.
     anthropic_api_key: str = Field(default="")
-    # Single source of truth for the model string — never hardcode it elsewhere.
-    llm_model: str = Field(default="claude-sonnet-4-20250514")
+    # Cheap, fast default for the research agents (scout/fundamental/technical/reflection).
+    llm_model_default: str = Field(default="claude-haiku-4-5-20251001")
+    # Stronger model reserved for the capital-protecting judge.
+    llm_model_judge: str = Field(default="claude-sonnet-4-6")
 
     # Broker
     groww_api_key: str = Field(default="")
