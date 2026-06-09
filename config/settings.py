@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     groww_api_secret: str = Field(default="")
     groww_access_token: str = Field(default="")
 
+    # Reddit (optional — social sentiment on stocks; read-only public posts)
+    reddit_client_id: str = Field(default="")
+    reddit_client_secret: str = Field(default="")
+
     # Telegram (optional — remote trade approval from your phone)
     telegram_bot_token: str = Field(default="")
     telegram_chat_id: str = Field(default="")

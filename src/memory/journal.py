@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -45,6 +45,59 @@ class TradeRecord(SQLModel, table=True):
     pnl_pct: Optional[float] = None
     outcome: str = "OPEN"  # WIN / LOSS / OPEN
     reflection: Optional[str] = None
+    thread_id: Optional[str] = None  # LangGraph thread_id at proposal (for traceability)
+    # Compact JSON of the entry-time verdicts — drives Root Cause Analysis reliably
+    # without needing to reconstruct the full state from the checkpointer.
+    state_snapshot: Optional[str] = None
+
+
+class DailyJournalEntry(SQLModel, table=True):
+    """Level 2 — one synthesized entry per trading day."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date: str = Field(index=True, unique=True)  # YYYY-MM-DD
+    market_regime: str = "UNKNOWN"  # Nifty trend that day
+    trades_proposed: int = 0
+    trades_executed: int = 0
+    trades_closed_today: int = 0
+    wins_today: int = 0
+    losses_today: int = 0
+    total_pnl_today: float = 0.0
+    patterns_observed: str = "[]"  # JSON list[str]
+    synthesis: str = ""  # LLM daily summary, 150-200 words
+    lessons_extracted: str = "[]"  # JSON list[str]
+    created_at: datetime = Field(default_factory=_now)
+
+
+class KnowledgeEntry(SQLModel, table=True):
+    """Level 4 — a standing learned pattern with a confidence that compounds."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    pattern_id: str = Field(index=True)  # slug, e.g. "banking-overbought-fails"
+    pattern_description: str = ""
+    category: str = "MARKET_REGIME_PATTERN"
+    confidence: float = 0.1  # 0.0-1.0
+    observed_count: int = 1
+    first_seen: datetime = Field(default_factory=_now)
+    last_confirmed: datetime = Field(default_factory=_now)
+    last_seen_in_trade: str = ""
+    is_hypothesis: bool = True  # True while observed_count < 3
+    is_active: bool = True
+    supporting_trades: str = "[]"  # JSON list of trade ids
+
+
+class RootCauseRecord(SQLModel, table=True):
+    """Forensic record of why a trade lost. Feeds weekly distillation."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    trade_id: int  # FK to TradeRecord.id
+    symbol: str
+    failure_category: str = "UNKNOWN"
+    root_cause_analysis: str = ""
+    what_signal_missed: str = ""
+    actionable_lesson: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
+# Threshold below which a pattern is still a hypothesis, not a rule.
+HYPOTHESIS_MAX_COUNT = 3
 
 
 class TradingJournal:
@@ -57,6 +110,16 @@ class TradingJournal:
     def log_proposed(self, state: TradeState) -> TradeRecord:
         tech = state.get("technical_verdict", {})
         judge = state.get("judge_verdict", {})
+        # Compact, self-contained snapshot of the entry thesis for later RCA.
+        snapshot = {
+            "fundamental_verdict": state.get("fundamental_verdict", {}),
+            "technical_verdict": tech,
+            "judge_verdict": judge,
+            "market_context": state.get("market_context", {}),
+            "sentiment": state.get("sentiment", {}),
+            "sector": state.get("sector", ""),
+            "manually_requested": bool(state.get("manually_requested")),
+        }
         record = TradeRecord(
             symbol=state.get("symbol", "UNKNOWN"),
             sector=state.get("sector") or None,
@@ -68,6 +131,8 @@ class TradingJournal:
             confidence=tech.get("score"),
             judge_score=judge.get("score"),
             judge_flags=json.dumps(judge.get("flags", [])),
+            thread_id=state.get("thread_id"),
+            state_snapshot=json.dumps(snapshot, default=str),
             outcome="OPEN",
         )
         with Session(self.engine) as session:
@@ -116,6 +181,118 @@ class TradingJournal:
             session.commit()
             session.refresh(record)
         return record
+
+    # ── Level 2: daily journal ─────────────────────────────────────────────────
+    def log_daily_entry(self, entry: DailyJournalEntry) -> DailyJournalEntry:
+        with Session(self.engine) as session:
+            # Upsert by date so re-running a day's synthesis overwrites, not duplicates.
+            existing = session.exec(
+                select(DailyJournalEntry).where(DailyJournalEntry.date == entry.date)
+            ).first()
+            if existing is not None:
+                for field in (
+                    "market_regime", "trades_proposed", "trades_executed",
+                    "trades_closed_today", "wins_today", "losses_today",
+                    "total_pnl_today", "patterns_observed", "synthesis", "lessons_extracted",
+                ):
+                    setattr(existing, field, getattr(entry, field))
+                session.add(existing)
+                session.commit()
+                session.refresh(existing)
+                return existing
+            session.add(entry)
+            session.commit()
+            session.refresh(entry)
+        return entry
+
+    def get_daily_entries(self, last_n_days: int = 7) -> list[DailyJournalEntry]:
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=last_n_days)).isoformat()
+        with Session(self.engine) as session:
+            stmt = (
+                select(DailyJournalEntry)
+                .where(DailyJournalEntry.date >= cutoff)
+                .order_by(DailyJournalEntry.date.desc())
+            )
+            return list(session.exec(stmt).all())
+
+    # ── Root Cause Analysis records ────────────────────────────────────────────
+    def log_rca(self, rca: RootCauseRecord) -> RootCauseRecord:
+        with Session(self.engine) as session:
+            session.add(rca)
+            session.commit()
+            session.refresh(rca)
+        return rca
+
+    def get_rcas(self, symbol: Optional[str] = None) -> list[RootCauseRecord]:
+        with Session(self.engine) as session:
+            stmt = select(RootCauseRecord)
+            if symbol:
+                stmt = stmt.where(RootCauseRecord.symbol == symbol)
+            stmt = stmt.order_by(RootCauseRecord.id.desc())
+            return list(session.exec(stmt).all())
+
+    # ── Level 4: knowledge base ─────────────────────────────────────────────────
+    def log_knowledge_entry(self, entry: KnowledgeEntry) -> KnowledgeEntry:
+        with Session(self.engine) as session:
+            session.add(entry)
+            session.commit()
+            session.refresh(entry)
+        return entry
+
+    def update_knowledge_confidence(
+        self, pattern_id: str, confirmed: bool
+    ) -> Optional[KnowledgeEntry]:
+        with Session(self.engine) as session:
+            entry = session.exec(
+                select(KnowledgeEntry).where(KnowledgeEntry.pattern_id == pattern_id)
+            ).first()
+            if entry is None:
+                return None
+            if confirmed:
+                entry.confidence = min(1.0, round(entry.confidence + 0.1, 4))
+                entry.observed_count += 1
+                entry.last_confirmed = _now()
+            else:
+                entry.confidence = max(0.0, round(entry.confidence - 0.05, 4))
+            entry.is_hypothesis = entry.observed_count < HYPOTHESIS_MAX_COUNT
+            session.add(entry)
+            session.commit()
+            session.refresh(entry)
+        return entry
+
+    def get_active_knowledge(self, min_confidence: float = 0.0) -> list[KnowledgeEntry]:
+        with Session(self.engine) as session:
+            stmt = (
+                select(KnowledgeEntry)
+                .where(KnowledgeEntry.is_active == True)  # noqa: E712 (SQL boolean)
+                .where(KnowledgeEntry.confidence >= min_confidence)
+                .order_by(KnowledgeEntry.confidence.desc())
+            )
+            return list(session.exec(stmt).all())
+
+    def format_knowledge_for_context(self, min_confidence: float = 0.3) -> str:
+        entries = [
+            e for e in self.get_active_knowledge(min_confidence=0.0)
+            if e.confidence > min_confidence
+        ]
+        if not entries:
+            return ""
+
+        def bucket(c: float) -> str:
+            if c >= 0.7:
+                return "HIGH"
+            if c >= 0.4:
+                return "MED "
+            return "LOW "
+
+        lines = ["SYSTEM LEARNED PATTERNS (confidence-ranked):"]
+        for e in entries:
+            tag = " (hypothesis)" if e.is_hypothesis else ""
+            lines.append(
+                f"[{bucket(e.confidence)} {e.confidence:.2f}] {e.pattern_description} "
+                f"— seen {e.observed_count}x{tag}"
+            )
+        return "\n".join(lines)
 
     # ── reads ────────────────────────────────────────────────────────────────
     def get_recent(self, n: int = 10) -> list[TradeRecord]:

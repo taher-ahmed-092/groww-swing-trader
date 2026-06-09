@@ -32,8 +32,11 @@ from src.data.fetcher import MarketDataFetcher
 from src.data.market_context import MarketContext
 from src.data.screener import ScreenerScraper
 from src.judge.evaluator import LLMJudge
+from src.memory.daily_synthesis import DailySynthesizer
 from src.memory.journal import TradeRecord, TradingJournal
+from src.memory.rca import RootCauseAnalyzer
 from src.memory.reflection import PostTradeReflector
+from src.memory.weekly_distillation import WeeklyDistiller
 from src.notifications.telegram_bot import TelegramNotifier
 from src.orchestrator.state import get_initial_state
 from src.risk.checker import RiskChecker
@@ -41,11 +44,37 @@ from src.risk.checker import RiskChecker
 console = Console()
 
 _CANDIDATES_FILE = os.path.join("data", "cache", "weekly_candidates.json")
+_DISTILL_MARKER = os.path.join("data", "cache", "last_distill.txt")
 TZ = "Asia/Kolkata"
 
 
 def _kill_switch() -> bool:
     return Path(LIMITS.kill_switch_file).exists()
+
+
+def _run_weekly_distillation_once() -> None:
+    """Run WeeklyDistiller at most once per calendar day.
+
+    Both weekly_research_job (7pm Sun) and weekly_distillation_job (8pm Sun) call
+    this; the marker prevents a double run, which would otherwise double-confirm
+    patterns and inflate confidence scores.
+    """
+    today = datetime.now().date().isoformat()
+    try:
+        if os.path.exists(_DISTILL_MARKER):
+            with open(_DISTILL_MARKER, encoding="utf-8") as f:
+                if f.read().strip() == today:
+                    console.print("[yellow][JOB] distillation already ran today — skipping[/yellow]")
+                    return
+    except OSError:
+        pass
+    WeeklyDistiller().distill()
+    try:
+        os.makedirs(os.path.dirname(_DISTILL_MARKER), exist_ok=True)
+        with open(_DISTILL_MARKER, "w", encoding="utf-8") as f:
+            f.write(today)
+    except OSError:
+        pass
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
@@ -55,6 +84,9 @@ def weekly_research_job() -> None:
     console.print("[cyan][JOB] weekly_research_job starting[/cyan]")
     notifier = TelegramNotifier()
     screener = ScreenerScraper()
+
+    # Distill the week's learning into standing knowledge before scanning (Sunday).
+    _run_weekly_distillation_once()
 
     should_pause, reason = PerformanceAnalyzer().should_pause_trading()
     if should_pause:
@@ -148,6 +180,7 @@ def daily_postmarket_job() -> None:
     journal = TradingJournal()
     fetcher = MarketDataFetcher()
     reflector = PostTradeReflector(journal)
+    analyzer = RootCauseAnalyzer(journal)
     notifier = TelegramNotifier()
 
     with Session(journal.engine) as session:
@@ -160,31 +193,74 @@ def daily_postmarket_job() -> None:
             continue
         hit_stop = trade.stop_price is not None and price <= trade.stop_price
         hit_target = trade.target_price is not None and price >= trade.target_price
-        if hit_stop or hit_target:
-            closed = journal.log_closed(trade.id, price)
-            reflector.reflect(closed)
-            console.print(
-                f"[magenta][JOB] closed {trade.symbol} @ {price} "
-                f"({'TARGET' if hit_target else 'STOP'}) → {closed.outcome}[/magenta]"
-            )
+        if not (hit_stop or hit_target):
+            continue
+
+        closed = journal.log_closed(trade.id, price)
+        reflector.reflect(closed)
+        console.print(
+            f"[magenta][JOB] closed {trade.symbol} @ {price} "
+            f"({'TARGET' if hit_target else 'STOP'}) → {closed.outcome}[/magenta]"
+        )
+
+        # Recover the entry-time snapshot and run learning hooks.
+        try:
+            snapshot = json.loads(closed.state_snapshot) if closed.state_snapshot else {}
+        except (json.JSONDecodeError, TypeError):
+            snapshot = {}
+        try:
+            if closed.outcome == "LOSS":
+                analyzer.analyze(closed, snapshot)  # categorize + extract lesson
+            elif closed.outcome == "WIN":
+                analyzer.analyze_win(closed, snapshot)  # confirm standing patterns
+        except Exception as exc:
+            console.print(f"[yellow][JOB] RCA failed for {trade.symbol}: {exc}[/yellow]")
 
     if datetime.now().weekday() == 4:  # Friday
         notifier.send_message(PerformanceAnalyzer().get_weekly_report())
+
+
+def daily_learning_job() -> None:
+    if _kill_switch():
+        return
+    console.print("[cyan][JOB] daily_learning_job starting[/cyan]")
+    entry = DailySynthesizer().synthesize()
+    try:
+        patterns = json.loads(entry.patterns_observed) if entry.patterns_observed else []
+        lessons = json.loads(entry.lessons_extracted) if entry.lessons_extracted else []
+    except (json.JSONDecodeError, TypeError):
+        patterns, lessons = [], []
+    TelegramNotifier().send_message(
+        "📔 Daily Learning\n"
+        f"{entry.synthesis}\n"
+        f"Patterns: {patterns}\n"
+        f"Lessons: {lessons}"
+    )
+
+
+def weekly_distillation_job() -> None:
+    if _kill_switch():
+        return
+    console.print("[cyan][JOB] weekly_distillation_job starting[/cyan]")
+    _run_weekly_distillation_once()  # sends the Telegram learning summary internally
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     console.print(f"[bold green]🚀 groww-swing-trader running | Mode: {settings.broker_mode}[/bold green]")
     console.print(
-        "[green]Scheduler active. Jobs: weekly scan (Sun 7pm), "
-        "daily check (Mon-Fri 9am), postmarket (Mon-Fri 4pm)[/green]"
+        "[green]Scheduler active. Jobs: weekly scan (Sun 7pm), daily check (Mon-Fri 9am), "
+        "postmarket (Mon-Fri 4pm), daily learning (Mon-Fri 4:30pm), "
+        "weekly distillation (Sun 8pm)[/green]"
     )
     console.print("[green]Press Ctrl+C to stop. KILL_SWITCH file halts all jobs immediately.[/green]")
 
     scheduler = BackgroundScheduler(timezone=TZ)
     scheduler.add_job(weekly_research_job, "cron", day_of_week="sun", hour=19, minute=0)
     scheduler.add_job(daily_premarket_job, "cron", day_of_week="mon-fri", hour=9, minute=0)
+    scheduler.add_job(daily_learning_job, "cron", day_of_week="mon-fri", hour=16, minute=30)
     scheduler.add_job(daily_postmarket_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
+    scheduler.add_job(weekly_distillation_job, "cron", day_of_week="sun", hour=20, minute=0)
     scheduler.start()
 
     try:

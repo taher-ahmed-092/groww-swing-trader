@@ -12,7 +12,7 @@ from collections import Counter
 
 from sqlmodel import Session, select
 
-from src.memory.journal import TradeRecord, TradingJournal
+from src.memory.journal import RootCauseRecord, TradeRecord, TradingJournal
 
 
 class LessonsRetriever:
@@ -57,6 +57,39 @@ class LessonsRetriever:
         for i, r in enumerate(top, 1):
             date = r.closed_at.date().isoformat() if r.closed_at else "n/a"
             lines.append(f"[{i}] {r.symbol} {date} {r.outcome}: {r.reflection}")
+        return "\n".join(lines)
+
+    def get_recent_rca_context(
+        self, symbol: str, sector: str | None = None, n: int = 3
+    ) -> str:
+        """Block C — recent root-cause lessons for this symbol or sector."""
+        with Session(self.journal.engine) as session:
+            rcas = list(
+                session.exec(
+                    select(RootCauseRecord).order_by(RootCauseRecord.id.desc())
+                ).all()
+            )
+            sectors: dict[int, str | None] = {}
+            trade_ids = [r.trade_id for r in rcas]
+            if trade_ids:
+                trades = session.exec(
+                    select(TradeRecord).where(TradeRecord.id.in_(trade_ids))
+                ).all()
+                sectors = {t.id: t.sector for t in trades}
+
+        relevant: list[RootCauseRecord] = []
+        for r in rcas:
+            if r.symbol == symbol or (sector and sectors.get(r.trade_id) == sector):
+                relevant.append(r)
+            if len(relevant) >= n:
+                break
+        if not relevant:
+            return ""
+
+        lines = ["RECENT LOSSES IN THIS SECTOR/SYMBOL:"]
+        for r in relevant:
+            date = r.created_at.date().isoformat() if r.created_at else "n/a"
+            lines.append(f"[{date}] {r.symbol}: {r.failure_category} — {r.actionable_lesson}")
         return "\n".join(lines)
 
     def get_failure_patterns(self) -> list[str]:

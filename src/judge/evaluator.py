@@ -13,6 +13,7 @@ from rich.console import Console
 from config.settings import settings
 from src.data.market_context import MarketContext
 from src.llm import get_judge_llm, parse_json_response
+from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 
 console = Console()
@@ -37,6 +38,7 @@ APPROVAL_THRESHOLD = 7.5  # out of 10
 class LLMJudge:
     def __init__(self) -> None:
         self.market = MarketContext()
+        self.lessons = LessonsRetriever()
 
     def _auto_veto(self, fundamental, technical, market_context, rr) -> list[str]:
         flags: list[str] = []
@@ -102,6 +104,25 @@ class LLMJudge:
                 "flags": flags,
             }
 
+        # Context blocks A (knowledge) + B (lessons) + C (recent RCAs).
+        sector = state.get("sector")
+        symbol = state.get("symbol", "")
+        knowledge_context = state.get("knowledge_context") or ""
+        lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, sector)
+        rca_context = self.lessons.get_recent_rca_context(symbol, sector)
+        system = _SYSTEM
+        blocks = []
+        if knowledge_context:
+            blocks.append(knowledge_context)
+        if lessons:
+            blocks.append(f"What the system has learned:\n{lessons}")
+        if rca_context:
+            blocks.append(rca_context)
+        if blocks:
+            system = _SYSTEM + "\n\n" + "\n\n".join(blocks)
+
+        sentiment = state.get("sentiment", {}) or fundamental.get("sentiment", {}) or {}
+
         prompt = (
             f"Fundamental: score={fundamental.get('score')} trend={fundamental.get('trend')} "
             f"pe_vs_sector={fundamental.get('pe_vs_sector')} moat_strength={fundamental.get('moat_strength')}\n"
@@ -109,6 +130,8 @@ class LLMJudge:
             f"Technical: score={technical.get('score')} signal={technical.get('signal')} "
             f"weekly_trend={technical.get('weekly_trend')} adx={technical.get('indicators', {}).get('adx_signal')} "
             f"pattern={technical.get('indicators', {}).get('candlestick_pattern')}\n"
+            f"Social sentiment: {sentiment.get('sentiment_label', 'N/A')} "
+            f"(score {sentiment.get('sentiment_score', 0)}); red_flags={sentiment.get('red_flags', [])}\n"
             f"Levels: Entry={entry} Stop={stop} Target={target} | R:R={rr}\n"
             f"Market: {market_context.get('context_summary')}\n"
             f"Manually requested by user: {manually_requested}\n\n"
@@ -131,7 +154,7 @@ class LLMJudge:
         )
 
         try:
-            resp = get_judge_llm(temperature=0).invoke([("system", _SYSTEM), ("human", prompt)])
+            resp = get_judge_llm(temperature=0).invoke([("system", system), ("human", prompt)])
             verdict = parse_json_response(getattr(resp, "content", "") or "")
         except Exception as exc:
             console.print(f"[yellow]Judge LLM call failed: {exc}[/yellow]")

@@ -21,6 +21,9 @@ class TradeState(TypedDict, total=False):
     market_context: dict             # from MarketContext.get_nifty_context()
     lessons: str                     # from LessonsRetriever, injected into agent prompts
     sector: str                      # from scout candidate, carried through state
+    sentiment: dict                  # from SocialSentimentAgent (inside FundamentalAgent)
+    knowledge_context: str           # from KnowledgeBase, injected once per run
+    thread_id: str                   # LangGraph thread_id, for journal traceability
 
 
 def get_initial_state(symbol: str) -> TradeState:
@@ -41,4 +44,7 @@ def get_initial_state(symbol: str) -> TradeState:
         market_context={},
         lessons="",
         sector="",
+        sentiment={},
+        knowledge_context="",
+        thread_id="",
     )

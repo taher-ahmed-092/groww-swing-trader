@@ -12,6 +12,7 @@ from rich.console import Console
 
 from config.settings import settings
 from src.agents.fundamental.ratios import compute_ratios
+from src.agents.sentiment.agent import SocialSentimentAgent
 from src.data.fetcher import MarketDataFetcher
 from src.data.screener import ScreenerScraper
 from src.llm import get_llm, parse_json_response
@@ -19,6 +20,10 @@ from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 
 console = Console()
+
+# Red-flag keywords that warrant a fundamental penalty when seen in social sentiment.
+_SENTIMENT_REGULATORY = ("fraud", "scam", "sebi", "ed raid", "regulatory", "default",
+                         "insolvency", "npa")
 
 # Rough sector P/E benchmarks for a cheap/fair/expensive read.
 _SECTOR_PE_BENCHMARK = {
@@ -39,6 +44,21 @@ class FundamentalAgent:
         self.fetcher = MarketDataFetcher()
         self.screener = ScreenerScraper()
         self.lessons = LessonsRetriever()
+        self.sentiment_agent = SocialSentimentAgent()
+
+    def _apply_sentiment(self, verdict: dict, sentiment: dict) -> dict:
+        """Surface social red flags into the verdict; penalize on multiple flags."""
+        verdict["sentiment"] = sentiment
+        red_flags = sentiment.get("red_flags", []) or []
+        regulatory = [f for f in red_flags if any(k in str(f).lower() for k in _SENTIMENT_REGULATORY)]
+        if regulatory:
+            weaknesses = list(verdict.get("weaknesses", []))
+            for f in regulatory:
+                weaknesses.append(f"(RED FLAG — SOCIAL) {f}")
+            verdict["weaknesses"] = weaknesses
+        if len(red_flags) >= 2 and verdict.get("score") is not None:
+            verdict["score"] = round(max(0.0, verdict["score"] - 0.1), 4)
+        return verdict
 
     def _gather(self, symbol: str) -> dict:
         """Merge screener (primary) over yfinance-derived ratios (fallback)."""
@@ -125,6 +145,10 @@ class FundamentalAgent:
         trend = self._trend(data)
         pe_vs_sector = self._pe_vs_sector(data, sector)
 
+        # Social sentiment sub-agent (never raises; neutral on failure).
+        company_name = data.get("name") or symbol
+        sentiment = self.sentiment_agent.analyze(symbol, company_name)
+
         base_extra = {
             "hard_rejected": False,
             "trend": trend,
@@ -133,22 +157,35 @@ class FundamentalAgent:
         }
 
         if not settings.has_anthropic_key:
-            return {
+            verdict = {
                 "score": 0.5, "strengths": [], "weaknesses": [], "swot": {},
                 "moat": "unknown", "moat_strength": "UNKNOWN", "proceed": True,
                 "reasoning": "MOCK — no ANTHROPIC_API_KEY; numbers computed but not interpreted.",
                 **base_extra,
             }
+            return self._apply_sentiment(verdict, sentiment)
 
+        # Context blocks injected at the TOP of the prompt (before stock-specific data).
+        knowledge_context = state.get("knowledge_context") or ""
         lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, sector)
         system = _SYSTEM
+        context_blocks = []
+        if knowledge_context:
+            context_blocks.append(knowledge_context)
         if lessons:
-            system = f"{_SYSTEM}\n\nWhat the system has learned:\n{lessons}"
+            context_blocks.append(f"What the system has learned:\n{lessons}")
+        if context_blocks:
+            system = _SYSTEM + "\n\n" + "\n\n".join(context_blocks)
 
         prompt = (
             f"Company: {symbol} ({data.get('name')}), sector: {sector}\n"
             f"Computed numbers (authoritative, do not change):\n{data}\n"
-            f"Derived: 3yr growth trend = {trend}; valuation vs sector = {pe_vs_sector}\n\n"
+            f"Derived: 3yr growth trend = {trend}; valuation vs sector = {pe_vs_sector}\n"
+            f"SOCIAL SENTIMENT: {sentiment.get('sentiment_label')} "
+            f"(score: {sentiment.get('sentiment_score'):.2f})\n"
+            f"Key events: {sentiment.get('key_events')}\n"
+            f"Red flags: {sentiment.get('red_flags') or 'None'}\n"
+            f"Corporate actions: {sentiment.get('corporate_actions') or 'None'}\n\n"
             "Pay explicit attention to ROCE (capital efficiency) and promoter pledging "
             "(a manipulation/risk flag). Then answer.\n\n"
             "Respond ONLY with JSON of the form:\n"
@@ -179,4 +216,4 @@ class FundamentalAgent:
                 "reasoning": "LLM response unparseable; defaulting to no-proceed.",
             }
         verdict.update(base_extra)
-        return verdict
+        return self._apply_sentiment(verdict, sentiment)

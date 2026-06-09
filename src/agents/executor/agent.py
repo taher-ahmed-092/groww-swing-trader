@@ -78,5 +78,6 @@ class ExecutorAgent:
         # 4. Journal the execution.
         self.journal.log_executed(record.id, result)
 
-        # 5. Return the result.
+        # 5. Return the result (carry the journal trade_id for downstream RCA/closure).
+        result["trade_id"] = record.id
         return result

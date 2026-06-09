@@ -117,10 +117,21 @@ class TechnicalAgent:
             return _enforce_weekly(verdict)
 
         fundamental = state.get("fundamental_verdict", {})
-        lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, state.get("sector"))
+        # Context blocks A (knowledge) + B (lessons) + C (recent RCAs).
+        sector = state.get("sector")
+        knowledge_context = state.get("knowledge_context") or ""
+        lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, sector)
+        rca_context = self.lessons.get_recent_rca_context(symbol, sector)
         system = _SYSTEM
+        blocks = []
+        if knowledge_context:
+            blocks.append(knowledge_context)
         if lessons:
-            system = f"{_SYSTEM}\n\nWhat the system has learned:\n{lessons}"
+            blocks.append(f"What the system has learned:\n{lessons}")
+        if rca_context:
+            blocks.append(rca_context)
+        if blocks:
+            system = _SYSTEM + "\n\n" + "\n\n".join(blocks)
 
         prompt = (
             f"Symbol: {symbol}\n"

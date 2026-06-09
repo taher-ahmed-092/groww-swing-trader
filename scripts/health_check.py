@@ -40,12 +40,16 @@ KEY_MODULES = [
     "src.memory.journal",
     "src.memory.reflection",
     "src.memory.lessons",
+    "src.memory.rca",
+    "src.memory.daily_synthesis",
+    "src.memory.weekly_distillation",
     "src.portfolio.ledger",
     "src.backtest.runner",
     "src.data.screener",
     "src.data.market_context",
     "src.notifications.telegram_bot",
     "src.analytics.performance",
+    "src.agents.sentiment.agent",
 ]
 
 

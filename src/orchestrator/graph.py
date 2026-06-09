@@ -30,7 +30,9 @@ from src.agents.technical.agent import TechnicalAgent
 from src.analytics.performance import PerformanceAnalyzer
 from src.data.market_context import MarketContext
 from src.judge.evaluator import LLMJudge
+from src.memory.journal import TradingJournal
 from src.memory.lessons import LessonsRetriever
+from src.memory.rca import RootCauseAnalyzer
 from src.notifications.telegram_bot import TelegramNotifier
 from src.orchestrator.state import TradeState, get_initial_state
 from src.risk.checker import RiskChecker
@@ -70,11 +72,25 @@ def market_context_node(state: TradeState) -> dict:
 
 
 @kill_switch_guard
+def knowledge_context_node(state: TradeState) -> dict:
+    # Standing learned patterns, injected once and read by every downstream agent.
+    knowledge = TradingJournal().format_knowledge_for_context(min_confidence=0.3)
+    return {"knowledge_context": knowledge, "current_step": "knowledge_context"}
+
+
+@kill_switch_guard
 def lessons_node(state: TradeState) -> dict:
-    lessons = LessonsRetriever().get_relevant_lessons(
+    retriever = LessonsRetriever()
+    lessons = retriever.get_relevant_lessons(
         state.get("symbol", ""), state.get("sector") or None
     )
-    return {"lessons": lessons, "current_step": "lessons"}
+    update: dict = {"lessons": lessons, "current_step": "lessons"}
+    # Also (re)hydrate knowledge_context from the DB if not already set upstream.
+    if not state.get("knowledge_context"):
+        update["knowledge_context"] = retriever.journal.format_knowledge_for_context(
+            min_confidence=0.3
+        )
+    return update
 
 
 @kill_switch_guard
@@ -145,6 +161,29 @@ def reflection_node(state: TradeState) -> dict:
         f"Pipeline complete for {state.get('symbol')}: "
         f"status={result.get('status', 'N/A')}, mode={result.get('broker_mode', 'N/A')}."
     )
+    # If this run produced a closed LOSS, run Root Cause Analysis immediately.
+    # (In normal swing flow a trade closes days later via the post-market job, which
+    #  also runs RCA; this covers same-run closures and keeps the pipeline complete.)
+    if result.get("outcome") == "LOSS":
+        snapshot = {
+            "fundamental_verdict": state.get("fundamental_verdict", {}),
+            "technical_verdict": state.get("technical_verdict", {}),
+            "judge_verdict": state.get("judge_verdict", {}),
+            "market_context": state.get("market_context", {}),
+            "sentiment": state.get("sentiment", {}),
+            "sector": state.get("sector", ""),
+            "manually_requested": bool(state.get("manually_requested")),
+        }
+        trade_id = result.get("trade_id")
+        if trade_id is not None:
+            try:
+                journal = TradingJournal()
+                trade = journal.get_recent(50)
+                match = next((t for t in trade if t.id == trade_id), None)
+                if match is not None:
+                    RootCauseAnalyzer(journal).analyze(match, snapshot)
+            except Exception as exc:
+                console.print(f"[yellow]RCA in reflection_node failed: {exc}[/yellow]")
     return {"reflection": note, "current_step": "reflection"}
 
 
@@ -178,6 +217,7 @@ def build_graph() -> StateGraph:
     graph = StateGraph(TradeState)
 
     graph.add_node("market_context_node", market_context_node)
+    graph.add_node("knowledge_context_node", knowledge_context_node)
     graph.add_node("lessons_node", lessons_node)
     graph.add_node("scout_node", scout_node)
     graph.add_node("fundamental_node", fundamental_node)
@@ -191,7 +231,8 @@ def build_graph() -> StateGraph:
     graph.add_edge(START, "market_context_node")
 
     sequence = [
-        ("market_context_node", "lessons_node"),
+        ("market_context_node", "knowledge_context_node"),
+        ("knowledge_context_node", "lessons_node"),
         ("lessons_node", "scout_node"),
         ("scout_node", "fundamental_node"),
         ("fundamental_node", "technical_node"),
