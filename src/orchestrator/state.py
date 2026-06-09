@@ -18,6 +18,9 @@ class TradeState(TypedDict, total=False):
     errors: list[str]
     current_step: str
     manually_requested: bool         # True if user bypassed scout and requested this trade directly
+    market_context: dict             # from MarketContext.get_nifty_context()
+    lessons: str                     # from LessonsRetriever, injected into agent prompts
+    sector: str                      # from scout candidate, carried through state
 
 
 def get_initial_state(symbol: str) -> TradeState:
@@ -35,4 +38,7 @@ def get_initial_state(symbol: str) -> TradeState:
         errors=[],
         current_step="initialized",
         manually_requested=False,
+        market_context={},
+        lessons="",
+        sector="",
     )

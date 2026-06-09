@@ -1,44 +1,92 @@
 """
-LLM-as-judge — a skeptical senior trader that protects capital.
+LLM-as-judge — a senior risk officer that protects capital.
 
-Scores each proposed trade against fundamentals, technicals, and risk/reward. Can veto.
-Works in paper mode with no API key (returns a mock approval flagged NO_API_KEY).
+Cheap deterministic auto-vetoes run BEFORE the LLM (saving tokens): hard-rejected
+fundamentals, technical SKIP, poor R:R, choppy market, or fighting the Nifty/weekly
+trend. Survivors get a weighted multi-criteria scorecard; approval needs >= 7.5/10.
+Works in paper mode with no API key (mock approval unless an auto-veto fires).
 """
 from __future__ import annotations
 
 from rich.console import Console
 
 from config.settings import settings
+from src.data.market_context import MarketContext
 from src.llm import get_llm, parse_json_response
 from src.orchestrator.state import TradeState
 
 console = Console()
 
 _SYSTEM = (
-    "You are a skeptical senior trader evaluating a proposed swing trade.\n"
-    "Your job is to protect capital, not find reasons to trade.\n"
-    "Be critical. Approve only when multiple independent signals align and "
-    "risk/reward is clearly favorable.\n"
-    "Flag any sign of: emotional trading, FOMO, insufficient evidence, poor "
-    "risk/reward, or over-confidence."
+    "You are a senior risk officer at a prop trading desk. Your job is to protect "
+    "capital. You are paid to find reasons NOT to trade. Approve only when all "
+    "criteria align. Be skeptical of confidence > 0.9 — markets are uncertain."
 )
 
 _VALID_FLAGS = {
     "EMOTIONAL_TRADE_SUSPECTED", "LOW_CONVICTION", "POOR_RISK_REWARD",
     "FUNDAMENTAL_WEAK", "TECHNICAL_CONFLICT", "MANUALLY_REQUESTED", "NO_API_KEY",
+    "CHOPPY_MARKET", "WEEKLY_TREND_CONFLICT", "FUNDAMENTAL_DETERIORATING",
+    "PROMOTER_PLEDGE_RISK", "EARNINGS_PROXIMITY", "FIGHTING_NIFTY",
+    "HARD_REJECTED_FUNDAMENTAL", "TECHNICAL_SKIP",
 }
+
+APPROVAL_THRESHOLD = 7.5  # out of 10
 
 
 class LLMJudge:
+    def __init__(self) -> None:
+        self.market = MarketContext()
+
+    def _auto_veto(self, fundamental, technical, market_context, rr) -> list[str]:
+        flags: list[str] = []
+        signal = technical.get("signal")
+        indicators = technical.get("indicators", {})
+        adx_signal = technical.get("adx_signal") or indicators.get("adx_signal")
+        nifty_trend = market_context.get("nifty_trend")
+        weekly_trend = technical.get("weekly_trend") or indicators.get("weekly_trend")
+
+        if fundamental.get("hard_rejected"):
+            flags.append("HARD_REJECTED_FUNDAMENTAL")
+        if technical.get("proceed") is False and signal == "SKIP":
+            flags.append("TECHNICAL_SKIP")
+        if rr is not None and rr < 1.5:
+            flags.append("POOR_RISK_REWARD")
+        if adx_signal == "CHOPPY":
+            flags.append("CHOPPY_MARKET")
+        if nifty_trend == "DOWNTREND" and signal == "BUY":
+            flags.append("FIGHTING_NIFTY")
+        if weekly_trend == "DOWNTREND" and signal == "BUY":
+            flags.append("WEEKLY_TREND_CONFLICT")
+        return flags
+
     def evaluate(self, state: TradeState) -> dict:
         fundamental = state.get("fundamental_verdict", {})
         technical = state.get("technical_verdict", {})
+        market_context = state.get("market_context") or self.market.get_nifty_context()
         manually_requested = bool(state.get("manually_requested"))
 
         entry = technical.get("entry_price") or 0
         stop = technical.get("stop_price") or 0
         target = technical.get("target_price") or 0
         rr = round((target - entry) / (entry - stop), 4) if (entry - stop) else None
+
+        # ── Auto-veto (pre-LLM, runs even with no API key) ──
+        veto = self._auto_veto(fundamental, technical, market_context, rr)
+        if veto:
+            if manually_requested:
+                veto.append("MANUALLY_REQUESTED")
+            reason = "Auto-veto: " + ", ".join(veto)
+            console.print(f"[red][JUDGE] {reason}[/red]")
+            return {
+                "approved": False,
+                "score": 0.0,
+                "overall_score": 0.0,
+                "dimension_scores": {},
+                "reasoning": reason,
+                "one_line_verdict": "Vetoed before scorecard.",
+                "flags": veto,
+            }
 
         if not settings.has_anthropic_key:
             flags = ["NO_API_KEY"]
@@ -47,48 +95,61 @@ class LLMJudge:
             return {
                 "approved": True,
                 "score": 0.5,
+                "overall_score": 5.0,
+                "dimension_scores": {},
                 "reasoning": "MOCK — no API key",
+                "one_line_verdict": "Mock approval (no API key).",
                 "flags": flags,
             }
 
         prompt = (
-            f"Fundamental score: {fundamental.get('score')} | proceed={fundamental.get('proceed')}\n"
-            f"Fundamental key findings: strengths={fundamental.get('strengths')} "
-            f"weaknesses={fundamental.get('weaknesses')} moat={fundamental.get('moat')}\n\n"
-            f"Technical score: {technical.get('score')} | signal={technical.get('signal')}\n"
-            f"Entry={entry} Stop={stop} Target={target}\n"
-            f"Risk/Reward ratio: {rr}\n\n"
+            f"Fundamental: score={fundamental.get('score')} trend={fundamental.get('trend')} "
+            f"pe_vs_sector={fundamental.get('pe_vs_sector')} moat_strength={fundamental.get('moat_strength')}\n"
+            f"  ROCE/promoter from data: {fundamental.get('data', {})}\n"
+            f"Technical: score={technical.get('score')} signal={technical.get('signal')} "
+            f"weekly_trend={technical.get('weekly_trend')} adx={technical.get('indicators', {}).get('adx_signal')} "
+            f"pattern={technical.get('indicators', {}).get('candlestick_pattern')}\n"
+            f"Levels: Entry={entry} Stop={stop} Target={target} | R:R={rr}\n"
+            f"Market: {market_context.get('context_summary')}\n"
             f"Manually requested by user: {manually_requested}\n\n"
+            "Score each dimension 0-10, then a weighted overall (approve only if overall >= 7.5):\n"
+            "  fundamental_quality (30%): ROCE, moat, 3yr trend, promoter data\n"
+            "  technical_setup (25%): pattern, indicators, ADX, weekly alignment\n"
+            "  risk_reward (20%): the explicit R:R\n"
+            "  market_context (15%): Nifty + sector trend support\n"
+            "  conviction_consistency (10%): do fundamental and technical agree?\n\n"
             "Respond ONLY with JSON:\n"
             "{\n"
             '  "approved": <bool>,\n'
-            '  "score": <float 0-1>,\n'
+            '  "overall_score": <float 0-10>,\n'
+            '  "dimension_scores": {"fundamental_quality": <0-10>, "technical_setup": <0-10>,\n'
+            '     "risk_reward": <0-10>, "market_context": <0-10>, "conviction_consistency": <0-10>},\n'
+            f'  "flags": [<subset of {sorted(_VALID_FLAGS)}>],\n'
             '  "reasoning": "<concise>",\n'
-            f'  "flags": [<subset of {sorted(_VALID_FLAGS)}>]\n'
+            '  "one_line_verdict": "<one line>"\n'
             "}"
         )
 
         try:
-            resp = get_llm(temperature=0).invoke(
-                [("system", _SYSTEM), ("human", prompt)]
-            )
+            resp = get_llm(temperature=0).invoke([("system", _SYSTEM), ("human", prompt)])
             verdict = parse_json_response(getattr(resp, "content", "") or "")
         except Exception as exc:
             console.print(f"[yellow]Judge LLM call failed: {exc}[/yellow]")
             verdict = {}
 
         if not verdict:
-            verdict = {
-                "approved": False,
-                "score": 0.0,
-                "reasoning": "Judge response unparseable; vetoing for safety.",
-                "flags": ["LOW_CONVICTION"],
+            return {
+                "approved": False, "score": 0.0, "overall_score": 0.0,
+                "dimension_scores": {}, "reasoning": "Judge response unparseable; vetoing for safety.",
+                "one_line_verdict": "Unparseable — vetoed.", "flags": ["LOW_CONVICTION"],
             }
 
-        # Normalize flags and always surface MANUALLY_REQUESTED.
+        overall = float(verdict.get("overall_score", 0) or 0)
         flags = [f for f in verdict.get("flags", []) if f in _VALID_FLAGS]
         if manually_requested and "MANUALLY_REQUESTED" not in flags:
             flags.append("MANUALLY_REQUESTED")
         verdict["flags"] = flags
-        verdict["approved"] = bool(verdict.get("approved"))
+        verdict["overall_score"] = round(overall, 4)
+        verdict["score"] = round(overall / 10, 4)  # 0-1 for journal/back-compat
+        verdict["approved"] = bool(overall >= APPROVAL_THRESHOLD)
         return verdict

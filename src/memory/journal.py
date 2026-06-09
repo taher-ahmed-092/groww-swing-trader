@@ -28,7 +28,9 @@ def _now() -> datetime:
 class TradeRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     symbol: str
+    sector: Optional[str] = None
     action: str = "BUY"
+    signal: Optional[str] = None  # judge/technical signal at proposal (e.g. BUY)
     entry_price: Optional[float] = None
     stop_price: Optional[float] = None
     target_price: Optional[float] = None
@@ -57,7 +59,9 @@ class TradingJournal:
         judge = state.get("judge_verdict", {})
         record = TradeRecord(
             symbol=state.get("symbol", "UNKNOWN"),
+            sector=state.get("sector") or None,
             action="BUY",
+            signal=tech.get("signal"),
             entry_price=tech.get("entry_price"),
             stop_price=tech.get("stop_price"),
             target_price=tech.get("target_price"),

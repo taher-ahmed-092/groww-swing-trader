@@ -1,9 +1,10 @@
 """
 Technical agent.
 
-Code computes the indicators (indicators.py) AND the deterministic entry/stop/target
-levels from config.risk_limits. The LLM only interprets indicator values and emits a
-signal — it never computes numbers (CLAUDE.md rule 4).
+Code computes the indicators (indicators.py) AND the deterministic levels: an
+ATR-based, volatility-aware stop (falling back to a % stop), target from the reward
+ratio. It also derives the weekly trend and never lets a BUY fight the weekly trend.
+The LLM only interprets values and emits a signal (CLAUDE.md rule 4).
 """
 from __future__ import annotations
 
@@ -13,26 +14,52 @@ from config.risk_limits import LIMITS
 from config.settings import settings
 from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
+from src.data.market_context import MarketContext
 from src.llm import get_llm, parse_json_response
+from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 
 console = Console()
 
 _SYSTEM = (
-    "You are a technical analyst. You are given pre-computed indicator values and "
-    "fixed entry/stop/target levels. Interpret the setup and emit a signal. You MUST "
-    "NOT invent or recompute any numbers — reason only from the values provided."
+    "You are a technical analyst. You are given pre-computed indicator values, "
+    "fixed entry/stop/target levels, the weekly trend, and broad market context. "
+    "Interpret the setup and emit a signal. You MUST NOT invent or recompute any "
+    "numbers — reason only from the values provided."
 )
 
 
 class TechnicalAgent:
     def __init__(self) -> None:
         self.fetcher = MarketDataFetcher()
+        self.market = MarketContext()
+        self.lessons = LessonsRetriever()
 
-    def _levels(self, entry_price: float) -> tuple[float, float]:
-        stop_price = round(entry_price * (1 - LIMITS.stop_loss_pct / 100), 4)
+    def _levels(self, entry_price: float, indicators: dict) -> tuple[float, float]:
+        # Prefer the ATR-based stop; fall back to the % stop if ATR is unavailable
+        # or produces a nonsensical (non-positive / above-entry) level.
+        atr_stop = indicators.get("atr_stop")
+        if atr_stop is not None and 0 < atr_stop < entry_price:
+            stop_price = round(float(atr_stop), 4)
+        else:
+            stop_price = round(entry_price * (1 - LIMITS.stop_loss_pct / 100), 4)
         target_price = round(entry_price + (entry_price - stop_price) * LIMITS.target_reward_ratio, 4)
         return stop_price, target_price
+
+    def _weekly_trend(self, symbol: str) -> str:
+        wdf = self.fetcher.get_price_history(symbol, period="1y", interval="1wk")
+        if wdf is None or wdf.empty:
+            return "SIDEWAYS"
+        wind = compute_indicators(wdf)
+        price = float(wdf["Close"].iloc[-1])
+        ma50 = wind.get("ma_50")
+        if ma50 is None:
+            return "SIDEWAYS"
+        if price > ma50 * 1.01:
+            return "UPTREND"
+        if price < ma50 * 0.99:
+            return "DOWNTREND"
+        return "SIDEWAYS"
 
     def analyze(self, state: TradeState) -> dict:
         symbol = state["symbol"]
@@ -43,48 +70,84 @@ class TechnicalAgent:
             return {
                 "score": 0.0, "signal": "SKIP", "entry_price": 0.0, "stop_price": 0.0,
                 "target_price": 0.0, "patterns": [], "indicators": indicators,
-                "proceed": False, "reasoning": "No price data available.",
+                "weekly_trend": "SIDEWAYS", "proceed": False, "flags": [],
+                "reasoning": "No price data available.",
             }
 
         entry_price = round(float(df["Close"].iloc[-1]), 4)
-        stop_price, target_price = self._levels(entry_price)
+        stop_price, target_price = self._levels(entry_price, indicators)
+        weekly_trend = self._weekly_trend(symbol)
+        market_context = state.get("market_context") or self.market.get_nifty_context()
+
+        flags: list[str] = []
+        if indicators.get("adx_signal") == "CHOPPY":
+            flags.append("CHOPPY_MARKET")
 
         base = {
             "entry_price": entry_price,
             "stop_price": stop_price,
             "target_price": target_price,
             "indicators": indicators,
+            "weekly_trend": weekly_trend,
+            "flags": flags,
         }
 
+        def _enforce_weekly(verdict: dict) -> dict:
+            # Never fight the weekly trend: downgrade a BUY to HOLD in a weekly downtrend.
+            if weekly_trend == "DOWNTREND" and verdict.get("signal") == "BUY":
+                verdict["signal"] = "HOLD"
+                verdict["proceed"] = False
+                vflags = list(verdict.get("flags", []))
+                if "WEEKLY_TREND_CONFLICT" not in vflags:
+                    vflags.append("WEEKLY_TREND_CONFLICT")
+                verdict["flags"] = vflags
+                verdict["reasoning"] = (
+                    "Downgraded BUY→HOLD: weekly trend is DOWNTREND. "
+                    + verdict.get("reasoning", "")
+                )
+            return verdict
+
         if not settings.has_anthropic_key:
-            return {
+            verdict = {
                 **base,
                 "score": 0.5, "signal": "HOLD", "patterns": [], "proceed": True,
                 "reasoning": "MOCK — no ANTHROPIC_API_KEY; indicators computed but not interpreted.",
             }
+            verdict["flags"] = list(flags)
+            return _enforce_weekly(verdict)
 
         fundamental = state.get("fundamental_verdict", {})
+        lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, state.get("sector"))
+        system = _SYSTEM
+        if lessons:
+            system = f"{_SYSTEM}\n\nWhat the system has learned:\n{lessons}"
+
         prompt = (
             f"Symbol: {symbol}\n"
-            f"Entry: {entry_price}  Stop: {stop_price}  Target: {target_price} "
-            "(these are fixed, do not change them)\n"
+            f"Entry: {entry_price}  Stop: {stop_price} (ATR-based)  Target: {target_price} "
+            "(fixed, do not change)\n"
             f"Indicators (authoritative): {indicators}\n"
-            f"Fundamental verdict score: {fundamental.get('score')} "
-            f"proceed={fundamental.get('proceed')}\n\n"
+            f"Candlestick pattern: {indicators.get('candlestick_pattern')}\n"
+            f"OBV trend: {indicators.get('obv_trend')} | ADX signal: {indicators.get('adx_signal')}\n"
+            f"Weekly trend: {weekly_trend}\n"
+            f"Market context: {market_context.get('context_summary')}\n"
+            f"Fundamental score: {fundamental.get('score')} proceed={fundamental.get('proceed')}\n\n"
+            "Answer these explicitly in your reasoning: Is there a clear entry trigger "
+            "visible in the pattern/indicators? Is the weekly trend supportive or working "
+            "against this setup? What is the most critical support level below the current price?\n\n"
             "Respond ONLY with JSON:\n"
             "{\n"
             '  "score": <float 0-1>,\n'
             '  "signal": "BUY" | "HOLD" | "SKIP",\n'
             '  "patterns": [<str>],\n'
+            '  "critical_support": <float or null>,\n'
             '  "proceed": <bool>,\n'
-            '  "reasoning": "<concise; note alignment with fundamentals>"\n'
+            '  "reasoning": "<concise; note entry trigger, weekly alignment, support>"\n'
             "}"
         )
 
         try:
-            resp = get_llm(temperature=0).invoke(
-                [("system", _SYSTEM), ("human", prompt)]
-            )
+            resp = get_llm(temperature=0).invoke([("system", system), ("human", prompt)])
             verdict = parse_json_response(getattr(resp, "content", "") or "")
         except Exception as exc:
             console.print(f"[yellow]Technical LLM call failed: {exc}[/yellow]")
@@ -96,4 +159,6 @@ class TechnicalAgent:
                 "reasoning": "LLM response unparseable; defaulting to SKIP.",
             }
         verdict.update(base)
-        return verdict
+        # Merge any LLM-emitted flags with code-derived flags.
+        verdict["flags"] = list({*flags, *verdict.get("flags", [])})
+        return _enforce_weekly(verdict)

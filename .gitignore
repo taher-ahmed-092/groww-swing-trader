@@ -14,8 +14,9 @@ build/
 .python-version
 
 # Data & logs (local only, can be large)
-data/
-logs/
+# Anchored to repo root so src/data/ source files are NOT ignored.
+/data/
+/logs/
 
 # Kill switch (presence triggers halt)
 KILL_SWITCH

@@ -39,8 +39,13 @@ KEY_MODULES = [
     "src.data.fetcher",
     "src.memory.journal",
     "src.memory.reflection",
+    "src.memory.lessons",
     "src.portfolio.ledger",
     "src.backtest.runner",
+    "src.data.screener",
+    "src.data.market_context",
+    "src.notifications.telegram_bot",
+    "src.analytics.performance",
 ]
 
 

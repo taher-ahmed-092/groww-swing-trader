@@ -19,16 +19,23 @@ from functools import wraps
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
+from rich.console import Console
 
 from config.risk_limits import LIMITS
 from config.settings import settings
 from src.agents.executor.agent import ExecutorAgent
 from src.agents.fundamental.agent import FundamentalAgent
-from src.agents.scout.agent import ScoutAgent
+from src.agents.scout.agent import WATCHLIST, ScoutAgent
 from src.agents.technical.agent import TechnicalAgent
+from src.analytics.performance import PerformanceAnalyzer
+from src.data.market_context import MarketContext
 from src.judge.evaluator import LLMJudge
+from src.memory.lessons import LessonsRetriever
+from src.notifications.telegram_bot import TelegramNotifier
 from src.orchestrator.state import TradeState, get_initial_state
 from src.risk.checker import RiskChecker
+
+console = Console()
 
 CHECKPOINT_DB = os.path.join("data", "journal", "checkpoints.db")
 
@@ -53,9 +60,33 @@ def kill_switch_guard(node_fn):
 
 # ── Nodes ───────────────────────────────────────────────────────────────────
 @kill_switch_guard
+def market_context_node(state: TradeState) -> dict:
+    ctx = MarketContext().get_nifty_context()
+    update: dict = {"market_context": ctx, "current_step": "market_context"}
+    if not ctx.get("market_safe_to_buy"):
+        # Don't block here — the judge factors the downtrend in (and can veto).
+        console.print(f"[yellow][MARKET] {ctx.get('context_summary')}[/yellow]")
+    return update
+
+
+@kill_switch_guard
+def lessons_node(state: TradeState) -> dict:
+    lessons = LessonsRetriever().get_relevant_lessons(
+        state.get("symbol", ""), state.get("sector") or None
+    )
+    return {"lessons": lessons, "current_step": "lessons"}
+
+
+@kill_switch_guard
 def scout_node(state: TradeState) -> dict:
     candidates = ScoutAgent().scan()
-    return {"candidates": candidates, "current_step": "scout"}
+    # Carry the traded symbol's sector through state for downstream agents.
+    symbol = state.get("symbol")
+    sector = next(
+        (c.get("sector") for c in candidates if c.get("symbol") == symbol),
+        WATCHLIST.get(symbol, {}).get("sector", ""),
+    )
+    return {"candidates": candidates, "sector": sector, "current_step": "scout"}
 
 
 @kill_switch_guard
@@ -97,7 +128,12 @@ def risk_node(state: TradeState) -> dict:
 @kill_switch_guard
 def executor_node(state: TradeState) -> dict:
     result = ExecutorAgent().execute(state)
-    return {"trade_result": result, "current_step": "executor"}
+    update: dict = {"trade_result": result, "current_step": "executor"}
+    if result.get("status") == "REJECTED_AT_APPROVAL":
+        errors = list(state.get("errors", []))
+        errors.append(result.get("error", "Trade rejected at human approval gate"))
+        update["errors"] = errors
+    return update
 
 
 @kill_switch_guard
@@ -109,7 +145,21 @@ def reflection_node(state: TradeState) -> dict:
         f"Pipeline complete for {state.get('symbol')}: "
         f"status={result.get('status', 'N/A')}, mode={result.get('broker_mode', 'N/A')}."
     )
-    return {"reflection": note, "current_step": "done"}
+    return {"reflection": note, "current_step": "reflection"}
+
+
+@kill_switch_guard
+def analytics_node(state: TradeState) -> dict:
+    should_pause, reason = PerformanceAnalyzer().should_pause_trading()
+    update: dict = {"current_step": "done"}
+    if should_pause:
+        msg = f"⚠️ Trading cool-down advised: {reason}"
+        console.print(f"[red][ANALYTICS] {msg}[/red]")
+        TelegramNotifier().send_message(msg)
+        errors = list(state.get("errors", []))
+        errors.append(msg)
+        update["errors"] = errors
+    return update
 
 
 # ── Routing ──────────────────────────────────────────────────────────────────
@@ -127,6 +177,8 @@ def _make_router(next_node: str):
 def build_graph() -> StateGraph:
     graph = StateGraph(TradeState)
 
+    graph.add_node("market_context_node", market_context_node)
+    graph.add_node("lessons_node", lessons_node)
     graph.add_node("scout_node", scout_node)
     graph.add_node("fundamental_node", fundamental_node)
     graph.add_node("technical_node", technical_node)
@@ -134,21 +186,25 @@ def build_graph() -> StateGraph:
     graph.add_node("risk_node", risk_node)
     graph.add_node("executor_node", executor_node)
     graph.add_node("reflection_node", reflection_node)
+    graph.add_node("analytics_node", analytics_node)
 
-    graph.add_edge(START, "scout_node")
+    graph.add_edge(START, "market_context_node")
 
     sequence = [
+        ("market_context_node", "lessons_node"),
+        ("lessons_node", "scout_node"),
         ("scout_node", "fundamental_node"),
         ("fundamental_node", "technical_node"),
         ("technical_node", "judge_node"),
         ("judge_node", "risk_node"),
         ("risk_node", "executor_node"),
         ("executor_node", "reflection_node"),
+        ("reflection_node", "analytics_node"),
     ]
     for current, nxt in sequence:
         graph.add_conditional_edges(current, _make_router(nxt), {nxt: nxt, END: END})
 
-    graph.add_edge("reflection_node", END)
+    graph.add_edge("analytics_node", END)
     return graph
 
 

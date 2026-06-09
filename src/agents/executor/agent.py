@@ -12,6 +12,7 @@ from config.settings import settings
 from src.broker.base import BrokerBase
 from src.broker.paper import PaperBroker
 from src.memory.journal import TradingJournal
+from src.notifications.telegram_bot import TelegramNotifier
 from src.orchestrator.state import TradeState
 
 console = Console()
@@ -45,6 +46,21 @@ class ExecutorAgent:
                 "fill_price": None,
                 "broker_mode": settings.broker_mode,
             }
+
+        # Live mode: human-in-the-loop approval before any real order.
+        if settings.broker_mode == "live":
+            notifier = TelegramNotifier()
+            notifier.send_trade_card(state)
+            approved = notifier.wait_for_approval(settings.auto_approve_timeout_seconds)
+            if not approved:
+                console.print("[red][EXECUTOR] Trade rejected at human approval gate.[/red]")
+                return {
+                    "order_id": None,
+                    "status": "REJECTED_AT_APPROVAL",
+                    "fill_price": None,
+                    "broker_mode": settings.broker_mode,
+                    "error": "Trade rejected at human approval gate (timeout or manual reject)",
+                }
 
         # Journal the proposal before placing.
         record = self.journal.log_proposed(state)
