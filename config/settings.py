@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     reddit_client_id: str = Field(default="")
     reddit_client_secret: str = Field(default="")
 
+    # Finnhub + NewsAPI (optional, free — richer news/insider/earnings data)
+    finnhub_api_key: str = Field(default="")
+    news_api_key: str = Field(default="")
+
     # Telegram (optional — remote trade approval from your phone)
     telegram_bot_token: str = Field(default="")
     telegram_chat_id: str = Field(default="")
@@ -46,6 +50,10 @@ class Settings(BaseSettings):
     @property
     def has_telegram(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def has_finnhub(self) -> bool:
+        return bool(self.finnhub_api_key)
 
     @property
     def has_anthropic_key(self) -> bool:

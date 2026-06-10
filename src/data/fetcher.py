@@ -2,15 +2,21 @@
 Market data access via yfinance. No API keys required.
 
 NSE symbols get a ".NS" suffix automatically (e.g. RELIANCE -> RELIANCE.NS).
-All methods are defensive: they log a warning and return None on failure, never raise.
+All methods are defensive: a missing/bad symbol is a routine DEBUG-level skip, not
+an error — we never raise and never spam the console with yfinance 404 tracebacks.
 """
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 import yfinance as yf
-from rich.console import Console
 
-console = Console()
+# Silence yfinance's own chatter ("$X: possibly delisted", HTTP 404 traces).
+for _noisy in ("yfinance", "yfinance.data", "yfinance.utils", "yfinance.ticker", "peewee"):
+    logging.getLogger(_noisy).setLevel(logging.CRITICAL)
+
+log = logging.getLogger(__name__)
 
 
 class MarketDataFetcher:
@@ -28,7 +34,7 @@ class MarketDataFetcher:
             ticker = yf.Ticker(self._to_yf_symbol(symbol))
             df = ticker.history(period=period, interval=interval)
             if df is None or df.empty:
-                console.print(f"[yellow]No price history for {symbol}[/yellow]")
+                log.debug("Skipping %s: data unavailable", symbol)
                 return None
             df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
             # Drop trailing/incomplete candles (yfinance can return a NaN Close for
@@ -37,8 +43,8 @@ class MarketDataFetcher:
             if df.empty:
                 return None
             return df
-        except Exception as exc:
-            console.print(f"[yellow]get_price_history failed for {symbol}: {exc}[/yellow]")
+        except Exception as exc:  # any failure → quiet skip, never raise
+            log.debug("Skipping %s: %s", symbol, exc)
             return None
 
     def get_fundamentals(self, symbol: str) -> dict | None:
@@ -46,11 +52,11 @@ class MarketDataFetcher:
             ticker = yf.Ticker(self._to_yf_symbol(symbol))
             info = ticker.info
             if not info:
-                console.print(f"[yellow]No fundamentals for {symbol}[/yellow]")
+                log.debug("No fundamentals for %s", symbol)
                 return None
             return dict(info)
         except Exception as exc:
-            console.print(f"[yellow]get_fundamentals failed for {symbol}: {exc}[/yellow]")
+            log.debug("Fundamentals unavailable for %s: %s", symbol, exc)
             return None
 
     def get_current_price(self, symbol: str) -> float | None:
@@ -60,5 +66,5 @@ class MarketDataFetcher:
                 return None
             return float(df["Close"].iloc[-1])
         except Exception as exc:
-            console.print(f"[yellow]get_current_price failed for {symbol}: {exc}[/yellow]")
+            log.debug("Current price unavailable for %s: %s", symbol, exc)
             return None

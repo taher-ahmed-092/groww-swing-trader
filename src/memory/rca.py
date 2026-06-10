@@ -25,6 +25,15 @@ _ALLOWED_CATEGORIES = {
     "SENTIMENT_REVERSAL", "OVERCONFIDENCE", "UNKNOWN",
 }
 
+# Losses we should NOT learn from — they reflect market noise, not a bad signal.
+NOISE_CATEGORIES = {"MARKET_EVENT", "SECTOR_HEADWIND", "MARKET_REGIME"}
+
+# Losses that ARE genuine signal failures — these update the knowledge base.
+SIGNAL_CATEGORIES = {
+    "SIGNAL_ERROR", "DATA_ERROR", "TIMING_ERROR", "STOP_TOO_TIGHT",
+    "OVERCONFIDENCE", "FUNDAMENTAL_DETERIORATION",
+}
+
 # failure_category → KnowledgeEntry.category
 _KNOWLEDGE_CATEGORY = {
     "MARKET_REGIME": "MARKET_REGIME_PATTERN",
@@ -82,6 +91,11 @@ class RootCauseAnalyzer:
         state_snapshot = state_snapshot or {}
         sector = state_snapshot.get("sector", "") or (trade.sector or "")
         category = self._preclassify(trade, state_snapshot)
+
+        # Only an UNKNOWN loss benefits from the market-event check (the network call).
+        # MARKET_REGIME is already labeled noise, so reclassifying it changes nothing.
+        if category == "UNKNOWN" and self._detect_market_event(trade, state_snapshot):
+            category = "MARKET_EVENT"
 
         fundamental = state_snapshot.get("fundamental_verdict", {}) or {}
         technical = state_snapshot.get("technical_verdict", {}) or {}
@@ -152,8 +166,34 @@ class RootCauseAnalyzer:
         )
         self.journal.log_rca(record)
 
-        self._upsert_pattern(pattern, trade)
+        # Noise-aware learning: only genuine signal failures update the knowledge base.
+        # MARKET_EVENT / SECTOR_HEADWIND losses are recorded for audit but DON'T
+        # corrupt patterns — noise doesn't mean our signal was wrong.
+        if category in SIGNAL_CATEGORIES:
+            self._upsert_pattern(pattern, trade)
+        else:
+            console.print(
+                f"[dim]NOISE LOSS — skipping knowledge update. Category: {category}[/dim]"
+            )
         return record
+
+    def _detect_market_event(self, trade: TradeRecord, state_snapshot: dict) -> bool:
+        """True if a broad market move likely swamped the individual stock (noise)."""
+        try:
+            close_date = trade.closed_at
+            if close_date is None:
+                return False
+            from src.data.fetcher import MarketDataFetcher
+
+            nifty_df = MarketDataFetcher().get_price_history("^NSEI", period="5d")
+            if nifty_df is not None and len(nifty_df) > 0:
+                daily_ret = nifty_df["Close"].pct_change().abs()
+                for d, ret in daily_ret.items():
+                    if abs((d.date() - close_date.date()).days) <= 1 and ret > 0.02:
+                        return True
+        except Exception:
+            pass
+        return False
 
     def _upsert_pattern(self, pattern: dict, trade: TradeRecord) -> None:
         existing = [

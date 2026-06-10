@@ -21,6 +21,7 @@ from src.llm import get_llm, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 from src.tracking.signal_tracker import SignalTracker
+from src.trading.time_window import TradingTimeWindow
 
 console = Console()
 
@@ -87,6 +88,10 @@ class TechnicalAgent:
         if indicators.get("adx_signal") == "CHOPPY":
             flags.append("CHOPPY_MARKET")
 
+        # Optimal entry window (used for countdown + auto-cancel-if-missed).
+        provisional = {"signal": "BUY", "indicators": indicators}
+        time_window = TradingTimeWindow().compute_entry_window(provisional, state)
+
         base = {
             "entry_price": entry_price,
             "stop_price": stop_price,
@@ -94,6 +99,7 @@ class TechnicalAgent:
             "indicators": indicators,
             "weekly_trend": weekly_trend,
             "entry_recommendation": entry_recommendation,
+            "time_window": time_window,
             "flags": flags,
         }
 
@@ -143,8 +149,17 @@ class TechnicalAgent:
             f"Entry: {entry_price}  Stop: {stop_price} (ATR-based)  Target: {target_price} "
             "(fixed, do not change)\n"
             f"Indicators (authoritative): {indicators}\n"
-            f"Candlestick pattern: {indicators.get('candlestick_pattern')}\n"
+            f"Candlestick pattern: {indicators.get('candlestick_pattern')} "
+            f"(confidence {indicators.get('candlestick_confidence')})\n"
             f"OBV trend: {indicators.get('obv_trend')} | ADX signal: {indicators.get('adx_signal')}\n"
+            f"Ichimoku: {indicators.get('ichimoku_signal')} — cloud is {indicators.get('ichimoku_cloud_color')}\n"
+            f"VWAP: Price {indicators.get('price_vs_vwap')} VWAP at {indicators.get('vwap')}\n"
+            f"Pivots: P={indicators.get('pivot')} R1={indicators.get('r1')} S1={indicators.get('s1')} "
+            f"R2={indicators.get('r2')} S2={indicators.get('s2')}\n"
+            f"CMF: {indicators.get('cmf_signal')} ({indicators.get('cmf_20')})\n"
+            f"Supertrend: {indicators.get('supertrend_direction')} at {indicators.get('supertrend')}\n"
+            f"52W Position: {indicators.get('week52_position')} "
+            f"({indicators.get('pct_from_52w_high')}% from high)\n"
             f"Weekly trend: {weekly_trend}\n"
             f"Market context: {market_context.get('context_summary')}\n"
             f"Fundamental score: {fundamental.get('score')} proceed={fundamental.get('proceed')}\n\n"

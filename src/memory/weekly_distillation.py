@@ -108,6 +108,13 @@ class WeeklyDistiller:
                 console.print(f"[yellow]Weekly distillation LLM call failed: {exc}[/yellow]")
                 parsed = {}
 
+            # Learning quality gate: if EVERY loss this week was market noise
+            # (MARKET_EVENT / SECTOR_HEADWIND / MARKET_REGIME), don't let those
+            # contradictions punish otherwise-good patterns.
+            from src.memory.rca import SIGNAL_CATEGORIES
+
+            week_has_signal_loss = any(r.failure_category in SIGNAL_CATEGORIES for r in rcas)
+
             if parsed:
                 for p in parsed.get("new_patterns", []) or []:
                     self._upsert_new_pattern(p)
@@ -115,9 +122,14 @@ class WeeklyDistiller:
                 for pid in parsed.get("confirmed_patterns", []) or []:
                     if self.journal.update_knowledge_confidence(pid, confirmed=True):
                         confirmed_ids.append(pid)
-                for pid in parsed.get("contradicted_patterns", []) or []:
-                    if self.journal.update_knowledge_confidence(pid, confirmed=False):
-                        contradicted_ids.append(pid)
+                if week_has_signal_loss:
+                    for pid in parsed.get("contradicted_patterns", []) or []:
+                        if self.journal.update_knowledge_confidence(pid, confirmed=False):
+                            contradicted_ids.append(pid)
+                elif parsed.get("contradicted_patterns"):
+                    console.print(
+                        "[dim]Skipping contradictions — all losses this week were noise.[/dim]"
+                    )
                 weekly_summary = parsed.get("weekly_summary", weekly_summary)
                 focus = parsed.get("focus_for_next_week", focus)
 

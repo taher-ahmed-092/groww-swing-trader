@@ -31,6 +31,7 @@ _VALID_FLAGS = {
     "CHOPPY_MARKET", "WEEKLY_TREND_CONFLICT", "FUNDAMENTAL_DETERIORATING",
     "PROMOTER_PLEDGE_RISK", "EARNINGS_PROXIMITY", "FIGHTING_NIFTY",
     "HARD_REJECTED_FUNDAMENTAL", "TECHNICAL_SKIP",
+    "SUPERTREND_BEARISH", "SELLING_PRESSURE", "BELOW_ALL_SUPPORTS",
 }
 
 APPROVAL_THRESHOLD = 7.5  # out of 10
@@ -61,6 +62,15 @@ class LLMJudge:
             flags.append("FIGHTING_NIFTY")
         if weekly_trend == "DOWNTREND" and signal == "BUY":
             flags.append("WEEKLY_TREND_CONFLICT")
+
+        # Phase 4 — supertrend / money-flow / support auto-vetoes.
+        cmf = indicators.get("cmf_20")
+        if indicators.get("supertrend_direction") == "BEARISH" and signal == "BUY":
+            flags.append("SUPERTREND_BEARISH")
+        if cmf is not None and cmf < -0.15 and signal == "BUY":
+            flags.append("SELLING_PRESSURE")
+        if indicators.get("price_vs_vwap") == "BELOW" and indicators.get("nearest_pivot_level") == "BELOW_S1":
+            flags.append("BELOW_ALL_SUPPORTS")
         return flags
 
     def evaluate(self, state: TradeState) -> dict:

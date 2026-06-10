@@ -361,6 +361,10 @@ class SocialSentimentAgent:
         sources_checked = list(collectors.keys())
         sources_with_data = [name for name, items in results.items() if items]
 
+        # Finnhub/NewsAggregator enrichment — only when a key is configured, so
+        # keyless/demo runs and unit tests keep the original lightweight behavior.
+        agg = self._finnhub_enrich(symbol, company_name) if settings.has_finnhub else {}
+
         # Flatten, dedupe by URL (keep URL-less items), filter to last 7 days.
         seen_urls: set[str] = set()
         all_items: list[dict] = []
@@ -374,7 +378,7 @@ class SocialSentimentAgent:
                 if self._recent(item):
                     all_items.append(item)
 
-        if not all_items:
+        if not all_items and not agg:
             return self._neutral(sources_checked)
 
         score, red_flags, positive_signals = self._score_sentiment(all_items)
@@ -382,6 +386,17 @@ class SocialSentimentAgent:
         corporate_actions = self._extract_corporate_actions(nse_items)
         key_events = [i.get("text", "")[:120] for i in nse_items[:5]]
         raw_headlines = [i.get("text", "")[:160] for i in all_items[:5]]
+
+        # Merge aggregator signals + blend Finnhub's own sentiment score.
+        if agg:
+            red_flags = sorted(set(red_flags + agg.get("red_flags", [])))
+            positive_signals = sorted(set(positive_signals + agg.get("positive_signals", [])))
+            sources_with_data = sorted(set(sources_with_data + ["finnhub"]))
+            fh_score = agg.get("finnhub_sentiment", {}).get("score")
+            if fh_score is not None:
+                score = round(max(-1.0, min(1.0, 0.7 * score + 0.3 * fh_score)), 4)
+            if agg.get("insider_signals"):
+                key_events = (key_events + agg["insider_signals"])[:8]
 
         return {
             "sentiment_score": score,
@@ -396,3 +411,12 @@ class SocialSentimentAgent:
             "nse_announcements_count": len(nse_items),
             "corporate_actions": corporate_actions,
         }
+
+    def _finnhub_enrich(self, symbol: str, company_name: str) -> dict:
+        """Pull richer signals via NewsAggregator (insider/earnings/finnhub sentiment)."""
+        try:
+            from src.data.news_aggregator import NewsAggregator
+
+            return NewsAggregator().get_all_news(symbol, company_name)
+        except Exception:
+            return {}

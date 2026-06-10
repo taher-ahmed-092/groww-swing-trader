@@ -34,11 +34,25 @@ def test_rca_categorizes_overconfidence(tmp_path):
     assert rec.failure_category == "OVERCONFIDENCE"
 
 
-def test_rca_knowledge_entry_created(tmp_path):
+def test_noise_loss_skips_knowledge_update(tmp_path):
+    # MARKET_REGIME (DOWNTREND) is noise — it must NOT create a knowledge pattern.
     journal = _journal(tmp_path)
-    analyzer = RootCauseAnalyzer(journal)
-    snapshot = {"market_context": {"nifty_trend": "DOWNTREND"}, "sector": "Banking"}
-    analyzer.analyze(_loss_trade(), snapshot)
+    RootCauseAnalyzer(journal).analyze(
+        _loss_trade(), {"market_context": {"nifty_trend": "DOWNTREND"}, "sector": "Banking"}
+    )
+    assert len(journal.get_active_knowledge(min_confidence=0.0)) == 0
+
+
+def test_signal_loss_creates_knowledge_entry(tmp_path):
+    # A genuine signal failure (OVERCONFIDENCE via manual request) DOES create one.
+    journal = _journal(tmp_path)
+    snapshot = {
+        "market_context": {"nifty_trend": "UPTREND"},
+        "manually_requested": True,
+        "judge_verdict": {"flags": []},
+        "sector": "Banking",
+    }
+    RootCauseAnalyzer(journal).analyze(_loss_trade(), snapshot)
     assert len(journal.get_active_knowledge(min_confidence=0.0)) == 1
 
 

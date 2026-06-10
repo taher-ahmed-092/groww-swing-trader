@@ -37,7 +37,9 @@ def test_low_confidence_rejected():
     state["technical_verdict"]["score"] = 0.5
     result = RiskChecker(open_positions=0).check(state)
     assert result["approved"] is False
-    assert any("min_confidence" in r for r in result["reasons"])
+    # Low scores must be rejected on the confidence floor (message wording is
+    # "score X < min Y"; threshold is 0.60 in demo mode, 0.80 for real money).
+    assert any("score" in r and "min" in r for r in result["reasons"])
 
 
 def test_too_many_open_positions_rejected():

@@ -11,7 +11,11 @@ import pandas as pd
 from ta.momentum import RSIIndicator, StochRSIIndicator
 from ta.trend import MACD, ADXIndicator, SMAIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
-from ta.volume import OnBalanceVolumeIndicator
+from ta.volume import (
+    ChaikinMoneyFlowIndicator,
+    OnBalanceVolumeIndicator,
+    VolumeWeightedAveragePrice,
+)
 
 
 def _last(series) -> float | None:
@@ -44,26 +48,43 @@ def _detect_candlestick(df: pd.DataFrame) -> str:
         upper = ch - max(co, cc)
         lower = min(co, cc) - cl
 
-        # Three-candle star patterns first (highest information content).
+        # Three-candle patterns first (highest information content).
         if len(df) >= 3:
             fo, fc = o[-3], c[-3]
             f_body = abs(fc - fo)
             mid_first = (fo + fc) / 2
             star_body = abs(pc - po)
-            # small middle candle relative to first
+            star_rng = (h[-2] - low_[-2]) or 1e-9
             small_star = f_body > 0 and star_body <= 0.5 * f_body
+            star_is_doji = star_body <= 0.1 * star_rng
+
+            # Three white soldiers / black crows — 3 consecutive directional candles.
+            if c[-3] > o[-3] and pc > po and cc > co and cc > pc > c[-3]:
+                return "THREE_WHITE_SOLDIERS"
+            if c[-3] < o[-3] and pc < po and cc < co and cc < pc < c[-3]:
+                return "THREE_BLACK_CROWS"
+
             if fc < fo and small_star and cc > co and cc > mid_first:
-                return "MORNING_STAR"
+                return "MORNING_DOJI_STAR" if star_is_doji else "MORNING_STAR"
             if fc > fo and small_star and cc < co and cc < mid_first:
                 return "EVENING_STAR"
 
-        # Engulfing (two candles).
+        # Two-candle patterns.
         if pc < po and cc > co and co <= pc and cc >= po:
             return "BULLISH_ENGULFING"
         if pc > po and cc < co and co >= pc and cc <= po:
             return "BEARISH_ENGULFING"
+        prev_mid = (po + pc) / 2
+        # Dark cloud cover: prior bullish, current opens above prior close, closes below its midpoint.
+        if pc > po and co > pc and cc < prev_mid and cc > po:
+            return "DARK_CLOUD_COVER"
+        # Piercing line: prior bearish, current opens below prior close, closes above its midpoint.
+        if pc < po and co < pc and cc > prev_mid and cc < po:
+            return "PIERCING_LINE"
 
         # Single-candle shapes.
+        if body <= 0.1 * rng and upper >= 0.3 * rng and lower >= 0.3 * rng:
+            return "SPINNING_TOP"
         if body <= 0.1 * rng:
             return "DOJI"
         if lower >= 2 * body and upper <= body and body > 0:
@@ -76,6 +97,53 @@ def _detect_candlestick(df: pd.DataFrame) -> str:
         return "NONE"
 
 
+_HIGH_CONFIDENCE_PATTERNS = {
+    "BULLISH_ENGULFING", "MORNING_STAR", "THREE_WHITE_SOLDIERS", "PIERCING_LINE", "HAMMER",
+}
+_MEDIUM_CONFIDENCE_PATTERNS = {"MORNING_DOJI_STAR", "INVERTED_HAMMER"}
+_LOW_CONFIDENCE_PATTERNS = {"DOJI", "SPINNING_TOP"}
+
+
+def _candlestick_confidence(pattern: str) -> str:
+    if pattern in _HIGH_CONFIDENCE_PATTERNS:
+        return "HIGH"
+    if pattern in _MEDIUM_CONFIDENCE_PATTERNS:
+        return "MEDIUM"
+    if pattern in _LOW_CONFIDENCE_PATTERNS:
+        return "LOW"
+    return "NONE"
+
+
+def _supertrend(df: pd.DataFrame, period: int = 14, multiplier: float = 2.0):
+    """Return (supertrend_value, direction) over the last candles. None on failure."""
+    try:
+        if len(df) < period + 2:
+            return None, None
+        high, low, close = df["High"], df["Low"], df["Close"]
+        atr = AverageTrueRange(high, low, close, window=period).average_true_range()
+        hl2 = (high + low) / 2
+        upper = (hl2 + multiplier * atr).values
+        lower = (hl2 - multiplier * atr).values
+        c = close.values
+        st = [0.0] * len(c)
+        direction = [True] * len(c)  # True = bullish (price above supertrend)
+        start = period
+        st[start] = lower[start]
+        for i in range(start + 1, len(c)):
+            if c[i] > st[i - 1]:
+                direction[i] = True
+            elif c[i] < st[i - 1]:
+                direction[i] = False
+            else:
+                direction[i] = direction[i - 1]
+            st[i] = lower[i] if direction[i] else upper[i]
+        if pd.isna(st[-1]):
+            return None, None
+        return round(float(st[-1]), 4), ("BULLISH" if direction[-1] else "BEARISH")
+    except Exception:
+        return None, None
+
+
 def compute_indicators(df: pd.DataFrame) -> dict:
     result: dict = {
         "rsi_14": None, "macd": None, "macd_signal": None, "macd_hist": None,
@@ -84,7 +152,15 @@ def compute_indicators(df: pd.DataFrame) -> dict:
         "trend": "SIDEWAYS", "support": None, "resistance": None, "rsi_signal": "NEUTRAL",
         # ── upgrade additions ──
         "adx_14": None, "adx_signal": "NEUTRAL", "obv": None, "obv_trend": "FALLING",
-        "stoch_rsi": None, "candlestick_pattern": "NONE", "fib_levels": {}, "atr_stop": None,
+        "stoch_rsi": None, "candlestick_pattern": "NONE", "candlestick_confidence": "NONE",
+        "fib_levels": {}, "atr_stop": None,
+        # ── Phase 4 additions ──
+        "ichimoku_conversion": None, "ichimoku_base": None, "ichimoku_signal": "NEUTRAL",
+        "ichimoku_cloud_color": None, "vwap": None, "price_vs_vwap": None,
+        "pivot": None, "r1": None, "r2": None, "s1": None, "s2": None,
+        "nearest_pivot_level": None, "cmf_20": None, "cmf_signal": "NEUTRAL",
+        "supertrend": None, "supertrend_direction": None,
+        "pct_from_52w_high": None, "pct_from_52w_low": None, "week52_position": None,
     }
 
     if df is None or df.empty:
@@ -185,8 +261,100 @@ def compute_indicators(df: pd.DataFrame) -> dict:
     except Exception:
         pass
 
-    # ── Candlestick pattern ──
+    # ── Candlestick pattern + confidence ──
     result["candlestick_pattern"] = _detect_candlestick(df)
+    result["candlestick_confidence"] = _candlestick_confidence(result["candlestick_pattern"])
+
+    price = float(close.iloc[-1])
+
+    # ── Ichimoku (manual) ──
+    try:
+        if n >= 52:
+            conv = (high.rolling(9).max().iloc[-1] + low.rolling(9).min().iloc[-1]) / 2
+            base = (high.rolling(26).max().iloc[-1] + low.rolling(26).min().iloc[-1]) / 2
+            span_a = (conv + base) / 2
+            span_b = (high.rolling(52).max().iloc[-1] + low.rolling(52).min().iloc[-1]) / 2
+            result["ichimoku_conversion"] = round(float(conv), 4)
+            result["ichimoku_base"] = round(float(base), 4)
+            result["ichimoku_cloud_color"] = "GREEN" if span_a > span_b else "RED"
+            if price > conv and price > base:
+                result["ichimoku_signal"] = "BULLISH"
+            elif price < conv and price < base:
+                result["ichimoku_signal"] = "BEARISH"
+            else:
+                result["ichimoku_signal"] = "NEUTRAL"
+    except Exception:
+        pass
+
+    # ── VWAP ──
+    try:
+        if n >= 20:
+            vwap = VolumeWeightedAveragePrice(
+                high=high, low=low, close=close, volume=volume, window=20
+            ).volume_weighted_average_price()
+            result["vwap"] = _last(vwap)
+            if result["vwap"] is not None:
+                result["price_vs_vwap"] = "ABOVE" if price > result["vwap"] else "BELOW"
+    except Exception:
+        pass
+
+    # ── Pivot points (from the previous completed session) ──
+    try:
+        if n >= 2:
+            ph, pl, pc_ = float(high.iloc[-2]), float(low.iloc[-2]), float(close.iloc[-2])
+            pivot = (ph + pl + pc_) / 3
+            result["pivot"] = round(pivot, 4)
+            result["r1"] = round(2 * pivot - pl, 4)
+            result["r2"] = round(pivot + (ph - pl), 4)
+            result["s1"] = round(2 * pivot - ph, 4)
+            result["s2"] = round(pivot - (ph - pl), 4)
+            if price >= result["r1"]:
+                result["nearest_pivot_level"] = "ABOVE_R1"
+            elif price >= pivot:
+                result["nearest_pivot_level"] = "NEAR_PIVOT"
+            elif price >= result["s1"]:
+                result["nearest_pivot_level"] = "ABOVE_S1"
+            else:
+                result["nearest_pivot_level"] = "BELOW_S1"
+    except Exception:
+        pass
+
+    # ── CMF (Chaikin Money Flow) ──
+    try:
+        if n >= 20:
+            cmf = ChaikinMoneyFlowIndicator(high, low, close, volume, window=20).chaikin_money_flow()
+            result["cmf_20"] = _last(cmf)
+            if result["cmf_20"] is not None:
+                if result["cmf_20"] > 0.1:
+                    result["cmf_signal"] = "BUYING_PRESSURE"
+                elif result["cmf_20"] < -0.1:
+                    result["cmf_signal"] = "SELLING_PRESSURE"
+                else:
+                    result["cmf_signal"] = "NEUTRAL"
+    except Exception:
+        pass
+
+    # ── Supertrend ──
+    st_val, st_dir = _supertrend(df)
+    result["supertrend"] = st_val
+    result["supertrend_direction"] = st_dir
+
+    # ── 52-week position ──
+    try:
+        hi = float(high.max())
+        lo = float(low.min())
+        if hi > lo:
+            result["pct_from_52w_high"] = round((price - hi) / hi * 100, 2)
+            result["pct_from_52w_low"] = round((price - lo) / lo * 100, 2)
+            pos = (price - lo) / (hi - lo)
+            if pos > 0.9:
+                result["week52_position"] = "NEAR_HIGH"
+            elif pos >= 0.4:
+                result["week52_position"] = "MID"
+            else:
+                result["week52_position"] = "NEAR_LOW"
+    except Exception:
+        pass
 
     # ── Fibonacci retracement (from 20-day high/low) ──
     try:

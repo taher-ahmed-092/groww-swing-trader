@@ -128,6 +128,7 @@ def technical_node(state: TradeState) -> dict:
     return {
         "technical_verdict": verdict,
         "entry_recommendation": verdict.get("entry_recommendation", {}),
+        "time_window": verdict.get("time_window", {}),
         "current_step": "technical",
     }
 

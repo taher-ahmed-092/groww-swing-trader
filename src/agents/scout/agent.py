@@ -52,7 +52,8 @@ WATCHLIST: dict[str, dict[str, str]] = {
     "WIPRO": {"name": "Wipro", "sector": "IT"},
     "HCLTECH": {"name": "HCL Technologies", "sector": "IT"},
     "TECHM": {"name": "Tech Mahindra", "sector": "IT"},
-    "LTIM": {"name": "LTIMindtree", "sector": "IT"},
+    # LTIM / LTIMINDTREE both 404 in yfinance (verified) — use Persistent Systems.
+    "PERSISTENT": {"name": "Persistent Systems", "sector": "IT"},
     # FMCG
     "HINDUNILVR": {"name": "Hindustan Unilever", "sector": "FMCG"},
     "ITC": {"name": "ITC", "sector": "FMCG"},
@@ -62,7 +63,8 @@ WATCHLIST: dict[str, dict[str, str]] = {
     "TATACONSUM": {"name": "Tata Consumer Products", "sector": "FMCG"},
     # Auto
     "MARUTI": {"name": "Maruti Suzuki", "sector": "Auto"},
-    "TATAMOTORS": {"name": "Tata Motors", "sector": "Auto"},
+    # TATAMOTORS returns no yfinance data post-demerger (verified) — use TVS Motor.
+    "TVSMOTOR": {"name": "TVS Motor", "sector": "Auto"},
     "M&M": {"name": "Mahindra & Mahindra", "sector": "Auto"},
     "BAJAJ-AUTO": {"name": "Bajaj Auto", "sector": "Auto"},
     "EICHERMOT": {"name": "Eicher Motors", "sector": "Auto"},

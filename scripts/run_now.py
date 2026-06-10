@@ -16,6 +16,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from rich.console import Console  # noqa: E402
+from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 from config.risk_limits import LIMITS  # noqa: E402
@@ -89,6 +90,70 @@ def _summarize(symbol: str, final: dict) -> dict:
     }
 
 
+def _all_flags(finals: list[dict]) -> set[str]:
+    flags: set[str] = set()
+    for f in finals:
+        flags.update(f.get("judge_verdict", {}).get("flags", []) or [])
+    return flags
+
+
+def _print_entry_windows(finals: list[dict]) -> None:
+    """For approved trades, show the optimal entry window + live countdown."""
+    for f in finals:
+        if not f.get("risk_check", {}).get("approved"):
+            continue
+        tw = f.get("time_window", {})
+        if not tw:
+            continue
+        urgent = " 🚨 ACT QUICKLY" if tw.get("urgency") == "HIGH" else ""
+        body = (
+            f"{tw['window_open']} – {tw['window_close']} IST ({tw['window_label']})\n"
+            f"{tw['countdown_display']}{urgent}\n"
+            f"Rationale: {tw['rationale']}"
+        )
+        console.print(Panel(body, title=f"⏰ ENTRY WINDOW — {f.get('symbol', '?')}",
+                            border_style="green"))
+
+
+def _print_why_no_trade(finals: list[dict], regime: dict) -> None:
+    """If every candidate was rejected, explain the market conditions plainly."""
+    if not finals:
+        return
+    approved = any(f.get("risk_check", {}).get("approved") for f in finals)
+    if approved:
+        return
+
+    flags = _all_flags(finals)
+    mc = finals[0].get("market_context", {})
+    rsi = mc.get("nifty_rsi") or 0
+    ma50 = (regime.get("ma50") or 0)
+
+    if "FIGHTING_NIFTY" in flags or mc.get("nifty_trend") == "DOWNTREND":
+        body = (
+            f"Nifty is in DOWNTREND (RSI {rsi:.0f}).\n"
+            "The system correctly avoids buying into a falling market.\n"
+            "This is not a failure — this is capital protection.\n"
+            "When Nifty recovers above MA50 and RSI rises above 50,\n"
+            "BUY signals will start appearing.\n"
+            f"💡 What to watch: Nifty above {ma50:.0f} AND RSI > 50"
+        )
+        console.print(Panel(body, title="📉 WHY NO TRADES TODAY", border_style="yellow"))
+    elif "CHOPPY_MARKET" in flags:
+        console.print(Panel(
+            "ADX is below threshold — market lacks clear direction.\n"
+            "Choppy markets produce false signals.\n"
+            "Waiting for ADX > 20 before entering.",
+            title="🌀 WHY NO TRADES TODAY", border_style="yellow",
+        ))
+    else:
+        console.print(Panel(
+            "No candidate cleared every gate today (confidence / risk / gut check).\n"
+            "The system only acts on high-conviction setups.",
+            title="ℹ️ WHY NO TRADES TODAY", border_style="yellow",
+        ))
+    console.print("[green]✅ System is working correctly. No action needed from you.[/green]")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="groww-swing-trader manual runner")
     parser.add_argument("--scout-only", action="store_true", help="show scout results only")
@@ -107,8 +172,10 @@ def main() -> int:
     console.print(f"[dim]Regime: {regime['regime']} — {regime['strategy']}[/dim]")
 
     if args.symbol:
-        rows = [_summarize(args.symbol, _run_pipeline(args.symbol))]
-        console.print(_results_table(rows))
+        final = _run_pipeline(args.symbol)
+        console.print(_results_table([_summarize(args.symbol, final)]))
+        _print_entry_windows([final])
+        _print_why_no_trade([final], regime)
         return 0
 
     candidates = ScoutAgent().scan()
@@ -117,12 +184,16 @@ def main() -> int:
     if args.scout_only or not (args.scan or args.symbol):
         return 0
 
-    rows = []
+    rows, finals = [], []
     for c in candidates[:2]:
         console.print(f"\n[cyan]Running full pipeline for {c['symbol']}…[/cyan]")
-        rows.append(_summarize(c["symbol"], _run_pipeline(c["symbol"])))
+        final = _run_pipeline(c["symbol"])
+        finals.append(final)
+        rows.append(_summarize(c["symbol"], final))
     console.print(_results_table(rows))
     console.print("[dim]This is what the system decided and WHY (see Reason column).[/dim]")
+    _print_entry_windows(finals)
+    _print_why_no_trade(finals, regime)
     return 0
 
 

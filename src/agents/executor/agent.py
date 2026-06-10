@@ -47,6 +47,20 @@ class ExecutorAgent:
                 "broker_mode": settings.broker_mode,
             }
 
+        # Entry-window gate — don't chase a setup whose optimal window has passed.
+        # LIVE only: in paper/demo we still want to exercise execution at any hour,
+        # so we compute & display the window but don't block (Phase 1 unblock intent).
+        time_window = state.get("time_window", {}) or {}
+        if settings.live_trading_enabled and time_window.get("current_status") == "MISSED":
+            console.print("[yellow][EXECUTOR] Entry window missed — auto-cancelled.[/yellow]")
+            return {
+                "order_id": None,
+                "status": "CANCELLED_WINDOW_MISSED",
+                "fill_price": None,
+                "broker_mode": settings.broker_mode,
+                "reason": time_window.get("countdown_display", "Entry window closed"),
+            }
+
         # Live mode: human-in-the-loop approval before any real order.
         if settings.broker_mode == "live":
             notifier = TelegramNotifier()

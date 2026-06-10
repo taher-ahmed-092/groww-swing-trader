@@ -27,6 +27,7 @@ class TradeState(TypedDict, total=False):
     entry_recommendation: dict       # from recommend_entry() in TechnicalAgent
     gut_check: dict                  # from GutCheckAgent (holistic assessment)
     sizing_details: dict             # from PositionSizer (Kelly/confidence/regime)
+    time_window: dict                # from TradingTimeWindow (optimal entry window)
 
 
 def get_initial_state(symbol: str) -> TradeState:
@@ -53,4 +54,5 @@ def get_initial_state(symbol: str) -> TradeState:
         entry_recommendation={},
         gut_check={},
         sizing_details={},
+        time_window={},
     )
