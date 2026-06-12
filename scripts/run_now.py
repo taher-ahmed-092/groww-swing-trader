@@ -20,13 +20,27 @@ from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 from config.risk_limits import LIMITS  # noqa: E402
+from config.settings import settings  # noqa: E402
 from src.agents.scout.agent import ScoutAgent  # noqa: E402
+from src.data.fetcher import MarketDataFetcher  # noqa: E402
 from src.data.regime_detector import RegimeDetector  # noqa: E402
 from src.orchestrator.graph import app  # noqa: E402
 from src.orchestrator.state import get_initial_state  # noqa: E402
-from src.utils.display import startup_panel  # noqa: E402
+from src.utils import visual  # noqa: E402
 
 console = Console()
+
+
+def _show_detail(symbol: str, final: dict) -> None:
+    """Rich trade card + indicator panel + mini chart for one result."""
+    decision = "APPROVED" if final.get("risk_check", {}).get("approved") else "REJECTED"
+    visual.print_trade_card(final, decision)
+    indicators = final.get("technical_verdict", {}).get("indicators", {})
+    if indicators:
+        visual.print_indicator_panel(indicators)
+    df = MarketDataFetcher().get_price_history(symbol, period="2mo")
+    if df is not None:
+        visual.print_mini_chart(df, symbol)
 
 
 def _kill_switch_active() -> bool:
@@ -162,7 +176,7 @@ def main() -> int:
     parser.add_argument("--demo", action="store_true", help="(demo mode is auto when no key)")
     args = parser.parse_args()
 
-    console.print(startup_panel())
+    visual.print_splash(settings)
 
     if _kill_switch_active():
         console.print("[bold red]KILL_SWITCH present — halting. Remove the file to proceed.[/bold red]")
@@ -174,12 +188,14 @@ def main() -> int:
     if args.symbol:
         final = _run_pipeline(args.symbol)
         console.print(_results_table([_summarize(args.symbol, final)]))
+        _show_detail(args.symbol, final)
         _print_entry_windows([final])
         _print_why_no_trade([final], regime)
         return 0
 
     candidates = ScoutAgent().scan()
     console.print(_scout_table(candidates, regime))
+    console.print(f"🎯 Found {len(candidates)} candidates in regime {regime['regime']}")
 
     if args.scout_only or not (args.scan or args.symbol):
         return 0
@@ -190,6 +206,7 @@ def main() -> int:
         final = _run_pipeline(c["symbol"])
         finals.append(final)
         rows.append(_summarize(c["symbol"], final))
+        _show_detail(c["symbol"], final)
     console.print(_results_table(rows))
     console.print("[dim]This is what the system decided and WHY (see Reason column).[/dim]")
     _print_entry_windows(finals)

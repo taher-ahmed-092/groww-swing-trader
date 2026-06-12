@@ -16,6 +16,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from rich.console import Console  # noqa: E402
+from sqlmodel import Session  # noqa: E402
 
 from src.memory.journal import TradingJournal  # noqa: E402
 from src.memory.rca import RootCauseAnalyzer  # noqa: E402
@@ -67,6 +68,12 @@ def main() -> int:
         journal.log_executed(record.id, {"fill_price": entry, "broker_mode": "paper"})
         close_price = entry * (1 + pnl_pct / 100)
         closed = journal.log_closed(record.id, round(close_price, 2))
+        # Mark as seeded so cold-start protection never tunes parameters on demo data.
+        with Session(journal.engine) as _s:
+            _rec = _s.get(type(closed), closed.id)
+            _rec.is_seeded = True
+            _s.add(_rec)
+            _s.commit()
 
         snapshot = json.loads(closed.state_snapshot or "{}")
         if closed.outcome == "LOSS":

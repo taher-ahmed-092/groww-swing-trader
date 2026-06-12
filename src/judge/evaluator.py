@@ -128,6 +128,13 @@ class LLMJudge:
         rca_context = self.lessons.get_recent_rca_context(symbol, sector)
         system = _SYSTEM
         blocks = []
+        try:
+            from src.analytics.performance import PerformanceAnalyzer
+
+            traj = PerformanceAnalyzer(self.lessons.journal).get_performance_trajectory()
+            blocks.append(f"SYSTEM PERFORMANCE: {traj['context_sentence']}")
+        except Exception:
+            pass
         if knowledge_context:
             blocks.append(knowledge_context)
         if lessons:

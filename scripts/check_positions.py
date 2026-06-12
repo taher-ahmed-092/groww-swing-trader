@@ -25,6 +25,7 @@ from src.memory.rca import RootCauseAnalyzer  # noqa: E402
 from src.memory.reflection import PostTradeReflector  # noqa: E402
 from src.risk.tiered_stops import TieredStopManager  # noqa: E402
 from src.tracking.signal_tracker import SignalTracker  # noqa: E402
+from src.utils import visual  # noqa: E402
 
 console = Console()
 
@@ -70,22 +71,38 @@ def main() -> int:
             closed_any = True
             continue
 
-        # Still holding — advance the tiered stop.
+        # Still holding — advance the tiered stop + show entry→target progress.
         action = stops.update_stops_for_held_position(trade, price)
-        pnl_pct = (price - (trade.entry_price or price)) / (trade.entry_price or price) * 100
+        entry = trade.entry_price or price
+        pnl_pct = (price - entry) / entry * 100
+        tgt = trade.target_price or price
+        span = (tgt - entry) or 1
+        progress = max(0.0, min(1.0, (price - entry) / span))
+        bar = "█" * round(progress * 10) + "░" * (10 - round(progress * 10))
+        pcolor = "green" if pnl_pct >= 0 else "red"
+        console.print(
+            f"[bold]{trade.symbol}[/]  ₹{entry:,.0f} ──[{pcolor}]{bar}[/]── "
+            f"₹{tgt:,.0f}  now ₹{price:,.0f} ([{pcolor}]{pnl_pct:+.1f}%[/])"
+        )
         if action["action"] != "HOLD":
             journal.update_position(
                 trade.id,
                 current_stop=action["new_stop"],
                 partial_exited=True if action["action"] == "PARTIAL_EXIT" else None,
             )
-            console.print(f"[cyan]{trade.symbol}: {action['action']} — {action['reason']}[/cyan]")
-        else:
-            console.print(f"[dim]{trade.symbol}: holding ({pnl_pct:+.1f}%). All positions behaving. ☕[/dim]")
+            console.print(f"  [cyan]{action['action']} — {action['reason']}[/cyan]")
+
+    # Recent closed-trade outcomes as a sparkline.
+    recent_closed = [
+        t.pnl_pct for t in journal.get_recent(40)
+        if t.outcome in ("WIN", "LOSS") and t.pnl_pct is not None
+    ]
+    if recent_closed:
+        visual.print_pnl_sparkline(list(reversed(recent_closed)))
 
     if closed_any:
-        entry = DailySynthesizer(journal).synthesize()
-        console.print(Panel(entry.synthesis, title="📔 Daily synthesis", border_style="blue"))
+        entry_e = DailySynthesizer(journal).synthesize()
+        console.print(Panel(entry_e.synthesis, title="📔 Daily synthesis", border_style="blue"))
     return 0
 
 

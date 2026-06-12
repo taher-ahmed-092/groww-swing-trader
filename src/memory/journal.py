@@ -56,6 +56,8 @@ class TradeRecord(SQLModel, table=True):
     partial_exit_pnl: Optional[float] = None
     # Rough API cost attributed to this trade's analysis (INR).
     api_cost_estimate_inr: Optional[float] = None
+    # Seeded demo trades must NOT drive parameter auto-tuning (cold-start protection).
+    is_seeded: bool = Field(default=False)
 
 
 class DailyJournalEntry(SQLModel, table=True):
@@ -89,6 +91,8 @@ class KnowledgeEntry(SQLModel, table=True):
     is_hypothesis: bool = True  # True while observed_count < 3
     is_active: bool = True
     supporting_trades: str = "[]"  # JSON list of trade ids
+    observed_in_regime: str = Field(default="UNKNOWN")  # market regime when learned
+    pattern_age_weight: float = Field(default=1.0)  # decays as the pattern ages
 
 
 class RootCauseRecord(SQLModel, table=True):
@@ -300,13 +304,40 @@ class TradingJournal:
             )
             return list(session.exec(stmt).all())
 
-    def format_knowledge_for_context(self, min_confidence: float = 0.3) -> str:
+    def update_pattern_ages(self) -> int:
+        """Decay pattern_age_weight for patterns not confirmed in 30+ days. Weekly job."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        updated = 0
+        with Session(self.engine) as session:
+            for e in session.exec(select(KnowledgeEntry)).all():
+                lc = e.last_confirmed
+                if lc is not None and lc.tzinfo is None:
+                    lc = lc.replace(tzinfo=timezone.utc)
+                if lc is not None and lc < cutoff and e.pattern_age_weight > 0.1:
+                    e.pattern_age_weight = round(e.pattern_age_weight * 0.9, 4)
+                    session.add(e)
+                    updated += 1
+            session.commit()
+        return updated
+
+    def format_knowledge_for_context(
+        self, min_confidence: float = 0.3, current_regime: str | None = None
+    ) -> str:
         entries = [
             e for e in self.get_active_knowledge(min_confidence=0.0)
             if e.confidence > min_confidence
         ]
         if not entries:
             return ""
+
+        def weight(e) -> float:
+            # Confidence × age decay × regime relevance (2× same-regime, 0.5× other).
+            regime_w = 1.0
+            if current_regime and e.observed_in_regime not in ("UNKNOWN", ""):
+                regime_w = 2.0 if e.observed_in_regime == current_regime else 0.5
+            return e.confidence * (e.pattern_age_weight or 1.0) * regime_w
+
+        entries.sort(key=weight, reverse=True)
 
         def bucket(c: float) -> str:
             if c >= 0.7:

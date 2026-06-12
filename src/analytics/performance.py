@@ -19,6 +19,32 @@ class PerformanceAnalyzer:
         self.journal = journal or TradingJournal()
         self.starting_capital = starting_capital
 
+    def get_performance_trajectory(self) -> dict:
+        """Compare the last 10 closed trades' win rate to the prior 10."""
+        closed = self._closed()
+        wins = [1 if t.outcome == "WIN" else 0 for t in closed]
+        if len(wins) < 6:
+            return {
+                "trajectory": "INSUFFICIENT_DATA", "trajectory_emoji": "🌱",
+                "context_sentence": "Too few closed trades to judge trajectory yet — keep paper trading.",
+            }
+        recent = wins[-10:]
+        prior = wins[-20:-10] or wins[:-10]
+        recent_wr = sum(recent) / len(recent)
+        prior_wr = (sum(prior) / len(prior)) if prior else recent_wr
+        delta = recent_wr - prior_wr
+        if delta > 0.1:
+            traj, emoji = "IMPROVING", "📈"
+        elif delta < -0.1:
+            traj, emoji = "DECLINING", "📉"
+        else:
+            traj, emoji = "STABLE", "➡️"
+        sentence = (
+            f"{emoji} Trajectory {traj}: last-10 win rate {recent_wr:.0%} "
+            f"vs prior-10 {prior_wr:.0%}."
+        )
+        return {"trajectory": traj, "trajectory_emoji": emoji, "context_sentence": sentence}
+
     def _closed(self) -> list[TradeRecord]:
         with Session(self.journal.engine) as session:
             stmt = (

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from pathlib import Path
 
 from rich.console import Console
 
@@ -27,8 +29,47 @@ def _pid(text: str) -> str:
 class WorkflowEnhancer:
     ADJUSTABLE_PARAMS = ADJUSTABLE_PARAMS
 
+    # Cold-start protection: don't tune parameters on thin/seeded evidence.
+    MIN_TRADES_FOR_AUTO_APPLY = 15
+    MIN_TRADES_FOR_SUGGESTIONS = 5
+    MOMENTUM_FILE = Path("data/cache/param_suggestions_history.json")
+
     def __init__(self, journal: TradingJournal | None = None) -> None:
         self.journal = journal or TradingJournal()
+
+    def _real_closed_count(self) -> int:
+        return len([
+            t for t in self.journal.get_recent(n=200)
+            if t.outcome in ("WIN", "LOSS") and not getattr(t, "is_seeded", False)
+        ])
+
+    def _load_momentum(self) -> dict:
+        try:
+            if self.MOMENTUM_FILE.exists():
+                return json.loads(self.MOMENTUM_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+        return {}
+
+    def _record_suggestion(self, param_name: str, suggested_value) -> None:
+        hist = self._load_momentum()
+        hist.setdefault(param_name, []).append(suggested_value)
+        hist[param_name] = hist[param_name][-3:]  # keep last 3
+        try:
+            os.makedirs(self.MOMENTUM_FILE.parent, exist_ok=True)
+            self.MOMENTUM_FILE.write_text(json.dumps(hist, indent=2))
+        except OSError:
+            pass
+
+    def _should_apply_change(self, param_name: str, new_value, current_value) -> bool:
+        """Momentum guard: require the previous suggestion to point the same way."""
+        hist = self._load_momentum().get(param_name, [])
+        if not hist:
+            return False  # need at least one prior same-direction suggestion
+        prev = hist[-1]
+        new_dir = (new_value > current_value) - (new_value < current_value)
+        prev_dir = (prev > current_value) - (prev < current_value)
+        return new_dir != 0 and new_dir == prev_dir
 
     def load_params(self) -> dict:
         return get_adaptive_params()
@@ -37,12 +78,26 @@ class WorkflowEnhancer:
         save_adaptive_params(params)
 
     def run(self, eval_results: dict) -> dict:
+        # ── Cold-start protection ──
+        n_real = self._real_closed_count()
+        if n_real < self.MIN_TRADES_FOR_SUGGESTIONS:
+            return {
+                "suggestions": [], "auto_applied": [], "params_updated": False,
+                "status": "waiting",
+                "message": (
+                    f"Building evidence… {n_real}/{self.MIN_TRADES_FOR_SUGGESTIONS} "
+                    "real (non-seeded) trades needed before tuning."
+                ),
+            }
+        allow_auto_apply = n_real >= self.MIN_TRADES_FOR_AUTO_APPLY
+
         if settings.has_anthropic_key and not settings.effective_demo_mode:
             suggestions = self._llm_suggestions(eval_results)
         else:
             suggestions = self._heuristic_suggestions(eval_results)
 
-        # Auto-apply safe, bounded changes.
+        # Auto-apply safe, bounded changes — only with enough real evidence AND a
+        # consistent-direction momentum guard.
         params = self.load_params()
         applied: list[dict] = []
         for s in suggestions:
@@ -54,6 +109,11 @@ class WorkflowEnhancer:
             bounds = self.ADJUSTABLE_PARAMS[param]
             clamped = max(bounds["min"], min(bounds["max"], s["param_new_value"]))
             old_val = params.get(param, bounds["current"])
+            # Always record the suggestion direction for the momentum guard.
+            same_direction = self._should_apply_change(param, clamped, old_val)
+            self._record_suggestion(param, clamped)
+            if not allow_auto_apply or not same_direction:
+                continue
             if clamped != old_val:
                 params[param] = clamped
                 applied.append({"param": param, "old_value": old_val,

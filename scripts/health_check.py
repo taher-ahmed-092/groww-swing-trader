@@ -63,6 +63,8 @@ KEY_MODULES = [
     "src.data.finnhub_client",
     "src.data.news_aggregator",
     "src.trading.time_window",
+    "src.utils.visual",
+    "src.agents.meta.feature_suggester",
     "src.utils.adaptive",
     "src.utils.tips",
     "src.utils.display",
