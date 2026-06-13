@@ -32,6 +32,7 @@ _VALID_FLAGS = {
     "PROMOTER_PLEDGE_RISK", "EARNINGS_PROXIMITY", "FIGHTING_NIFTY",
     "HARD_REJECTED_FUNDAMENTAL", "TECHNICAL_SKIP",
     "SUPERTREND_BEARISH", "SELLING_PRESSURE", "BELOW_ALL_SUPPORTS",
+    "ML_JUDGE_DISAGREEMENT",
 }
 
 APPROVAL_THRESHOLD = 7.5  # out of 10
@@ -194,6 +195,22 @@ class LLMJudge:
         flags = [f for f in verdict.get("flags", []) if f in _VALID_FLAGS]
         if manually_requested and "MANUALLY_REQUESTED" not in flags:
             flags.append("MANUALLY_REQUESTED")
+
+        # Blend the XGBoost win-probability (once trained on 30+ real trades).
+        try:
+            from src.ml.signal_combiner import SignalCombiner
+
+            ml_prob = SignalCombiner().predict_win_probability(state)
+        except Exception:
+            ml_prob = None
+        if ml_prob is not None:
+            blended = 0.6 * (overall / 10) + 0.4 * ml_prob
+            if abs((overall / 10) - ml_prob) > 0.3:
+                flags.append("ML_JUDGE_DISAGREEMENT")
+            overall = round(blended * 10, 2)
+            verdict["reasoning"] = (verdict.get("reasoning", "")
+                                    + f" | ML model: {ml_prob:.0%} win probability")
+
         verdict["flags"] = flags
         verdict["overall_score"] = round(overall, 4)
         verdict["score"] = round(overall / 10, 4)  # 0-1 for journal/back-compat

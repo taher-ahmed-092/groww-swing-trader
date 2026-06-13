@@ -63,8 +63,10 @@ def _scout_table(candidates: list[dict], regime: dict) -> Table:
     return table
 
 
-def _run_pipeline(symbol: str) -> dict:
+def _run_pipeline(symbol: str, extra: dict | None = None) -> dict:
     state = get_initial_state(symbol)
+    if extra:
+        state.update(extra)
     final = app.invoke(state, config={"configurable": {"thread_id": f"run-{symbol}"}})
     return final
 
@@ -102,6 +104,39 @@ def _summarize(symbol: str, final: dict) -> dict:
         "size": risk.get("position_size_inr", 0) or 0,
         "reason": reason,
     }
+
+
+def _print_pairs() -> None:
+    """Market-neutral pairs scan — has candidates even in a downtrend."""
+    from src.strategies.pairs_trading import PairsTradingStrategy
+
+    console.print("[cyan]Scanning correlated pairs for divergence…[/cyan]")
+    opps = PairsTradingStrategy().find_opportunities()
+    if not opps:
+        console.print(Panel("No pair divergences beyond 2σ today. Nothing to trade — that's fine.",
+                            title="🔀 Pairs Scan", border_style="dim"))
+        return
+    t = Table(title="🔀 Pairs Opportunities (market-neutral)", border_style="cyan")
+    for col in ("Buy", "vs Pair", "Z-Score", "Corr", "Entry", "Target", "Sector"):
+        t.add_column(col)
+    for o in opps:
+        t.add_row(o["buy_symbol"], o["pair_symbol"], f"{o['z_score']}", f"{o['correlation']}",
+                  f"₹{o['entry_price']}", f"₹{o['target_price']}", o["sector"])
+    console.print(t)
+    console.print(f"[green]Top: buy {opps[0]['buy_symbol']} — {opps[0]['rationale']}[/green]")
+
+
+def _print_strategy_breakdown() -> None:
+    from src.analytics.performance import PerformanceAnalyzer
+
+    bd = PerformanceAnalyzer().get_strategy_breakdown()
+    t = Table(title="🧠 Strategy Performance (the learning, made visible)", border_style="magenta")
+    for col in ("Strategy", "Win Rate", "Trades", "Avg P&L", "Best Regime"):
+        t.add_column(col)
+    for name, d in bd.items():
+        wr = f"{d['win_rate'] * 100:.0f}%" if d["win_rate"] is not None else "— (need data)"
+        t.add_row(name, wr, str(d["trades"]), f"{d['avg_pnl_pct']:+.1f}%", d["best_regime"])
+    console.print(t)
 
 
 def _all_flags(finals: list[dict]) -> set[str]:
@@ -174,6 +209,8 @@ def main() -> int:
     parser.add_argument("--scan", action="store_true", help="full pipeline on top 2 candidates")
     parser.add_argument("--symbol", type=str, help="full pipeline on a single symbol")
     parser.add_argument("--demo", action="store_true", help="(demo mode is auto when no key)")
+    parser.add_argument("--pairs", action="store_true", help="scan market-neutral pairs trades")
+    parser.add_argument("--strategies", action="store_true", help="show strategy performance")
     args = parser.parse_args()
 
     visual.print_splash(settings)
@@ -181,6 +218,14 @@ def main() -> int:
     if _kill_switch_active():
         console.print("[bold red]KILL_SWITCH present — halting. Remove the file to proceed.[/bold red]")
         return 1
+
+    if args.strategies:
+        _print_strategy_breakdown()
+        return 0
+
+    if args.pairs:
+        _print_pairs()
+        return 0
 
     regime = RegimeDetector().detect()
     console.print(f"[dim]Regime: {regime['regime']} — {regime['strategy']}[/dim]")
@@ -207,6 +252,23 @@ def main() -> int:
         finals.append(final)
         rows.append(_summarize(c["symbol"], final))
         _show_detail(c["symbol"], final)
+
+    # Market-neutral fallback: when the regime isn't bullish, momentum/breakout
+    # rarely fire — pairs trading still has candidates. This is the key benefit.
+    if regime["regime"] not in ("BULL_TRENDING",):
+        from src.strategies.pairs_trading import PairsTradingStrategy
+
+        opps = PairsTradingStrategy().find_opportunities()
+        if opps:
+            top = opps[0]
+            console.print(f"\n[cyan]Non-bull regime → trying market-neutral pair "
+                          f"{top['buy_symbol']}…[/cyan]")
+            final = _run_pipeline(top["buy_symbol"],
+                                  extra={"pairs_opportunity": top, "sector": top["sector"]})
+            finals.append(final)
+            rows.append(_summarize(top["buy_symbol"], final))
+            _show_detail(top["buy_symbol"], final)
+
     console.print(_results_table(rows))
     console.print("[dim]This is what the system decided and WHY (see Reason column).[/dim]")
     _print_entry_windows(finals)

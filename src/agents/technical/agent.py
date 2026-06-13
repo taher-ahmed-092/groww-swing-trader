@@ -20,6 +20,7 @@ from src.data.market_context import MarketContext
 from src.llm import get_llm, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
+from src.strategies.registry import StrategyRegistry
 from src.tracking.signal_tracker import SignalTracker
 from src.trading.time_window import TradingTimeWindow
 
@@ -84,6 +85,19 @@ class TechnicalAgent:
         market_context = state.get("market_context") or self.market.get_nifty_context()
         entry_recommendation = recommend_entry(indicators, entry_price)
 
+        # Strategy library: pick the best strategy for the current regime. If it fires
+        # a BUY, its levels/signal take precedence (regime-appropriate setup).
+        regime = market_context.get("regime", "TRANSITIONAL")
+        strat_ctx = {"pairs_opportunity": state.get("pairs_opportunity")}
+        strat_signal = StrategyRegistry().best_signal(
+            symbol, df, indicators, strat_ctx, regime
+        )
+        strategy_name = strat_signal.get("strategy_name", "momentum")
+        if strat_signal.get("signal") == "BUY":
+            entry_price = strat_signal["entry_price"]
+            stop_price = strat_signal["stop_price"]
+            target_price = strat_signal["target_price"]
+
         flags: list[str] = []
         if indicators.get("adx_signal") == "CHOPPY":
             flags.append("CHOPPY_MARKET")
@@ -100,6 +114,7 @@ class TechnicalAgent:
             "weekly_trend": weekly_trend,
             "entry_recommendation": entry_recommendation,
             "time_window": time_window,
+            "strategy_name": strategy_name,
             "flags": flags,
         }
 
@@ -119,8 +134,18 @@ class TechnicalAgent:
             return verdict
 
         if settings.effective_demo_mode:
-            # DEMO: deterministic rule-based signal (no LLM).
-            verdict = rule_based_technical_score(indicators, entry_price, stop_price, target_price)
+            # DEMO: prefer the regime-selected strategy; fall back to rule-based score.
+            if strat_signal.get("signal") == "BUY":
+                verdict = {
+                    "score": strat_signal["score"], "signal": "BUY", "patterns": [],
+                    "proceed": True,
+                    "reasoning": f"Strategy: {strategy_name} — {strat_signal['rationale']}",
+                }
+            else:
+                verdict = rule_based_technical_score(
+                    indicators, entry_price, stop_price, target_price
+                )
+                verdict["reasoning"] = f"Strategy: {strategy_name} — " + verdict.get("reasoning", "")
             verdict.update(base)
             return _enforce_weekly(verdict)
 

@@ -62,6 +62,9 @@ class SocialSentimentAgent:
 
     def __init__(self) -> None:
         os.makedirs(_CACHE_DIR, exist_ok=True)
+        from src.sentiment.finbert import FinBERTSentiment
+
+        self._finbert = FinBERTSentiment()
 
     # ── collectors (each returns list[dict]; never raises) ─────────────────────
     def _get_yahoo_news(self, symbol: str) -> list[dict]:
@@ -381,26 +384,35 @@ class SocialSentimentAgent:
         if not all_items and not agg:
             return self._neutral(sources_checked)
 
-        score, red_flags, positive_signals = self._score_sentiment(all_items)
+        keyword_score, red_flags, positive_signals = self._score_sentiment(all_items)
         nse_items = results.get("nse_announcements", [])
         corporate_actions = self._extract_corporate_actions(nse_items)
         key_events = [i.get("text", "")[:120] for i in nse_items[:5]]
         raw_headlines = [i.get("text", "")[:160] for i in all_items[:5]]
 
-        # Merge aggregator signals + blend Finnhub's own sentiment score.
+        # Finance-aware FinBERT score over the headlines (local-or-keyword, fast).
+        finbert = self._finbert.analyze_headlines([i.get("text", "") for i in all_items[:15]])
+        finbert_score = finbert.get("score", 0) or 0
+        fh_score = agg.get("finnhub_sentiment", {}).get("score") if agg else None
+
+        # Blend: FinBERT 0.5 + Finnhub 0.3 + keyword 0.2 (renormalize if no Finnhub).
+        if fh_score is not None:
+            score = 0.5 * finbert_score + 0.3 * fh_score + 0.2 * keyword_score
+        else:
+            score = (0.5 * finbert_score + 0.2 * keyword_score) / 0.7
+        score = round(max(-1.0, min(1.0, score)), 4)
+
         if agg:
             red_flags = sorted(set(red_flags + agg.get("red_flags", [])))
             positive_signals = sorted(set(positive_signals + agg.get("positive_signals", [])))
             sources_with_data = sorted(set(sources_with_data + ["finnhub"]))
-            fh_score = agg.get("finnhub_sentiment", {}).get("score")
-            if fh_score is not None:
-                score = round(max(-1.0, min(1.0, 0.7 * score + 0.3 * fh_score)), 4)
             if agg.get("insider_signals"):
                 key_events = (key_events + agg["insider_signals"])[:8]
 
         return {
             "sentiment_score": score,
             "sentiment_label": self._label(score),
+            "finbert": finbert,
             "total_items_found": len(all_items),
             "red_flags": red_flags,
             "positive_signals": positive_signals,

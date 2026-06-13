@@ -19,6 +19,43 @@ class PerformanceAnalyzer:
         self.journal = journal or TradingJournal()
         self.starting_capital = starting_capital
 
+    def get_strategy_breakdown(self) -> dict:
+        """Win rate / count / avg P&L / best regime per strategy (the learning made visible)."""
+        import json
+
+        closed = self._closed()
+        buckets: dict[str, list] = {}
+        for t in closed:
+            buckets.setdefault(getattr(t, "strategy_name", "momentum") or "momentum", []).append(t)
+
+        breakdown: dict[str, dict] = {}
+        for strat in ("momentum", "mean_reversion", "breakout", "pairs_trading"):
+            rows = buckets.get(strat, [])
+            n = len(rows)
+            wins = sum(1 for t in rows if t.outcome == "WIN")
+            avg_pnl = round(sum(t.pnl_pct or 0 for t in rows) / n, 2) if n else 0.0
+            # Best regime = highest win rate among regimes with >= 2 trades.
+            regime_stats: dict[str, list] = {}
+            for t in rows:
+                try:
+                    rg = json.loads(t.state_snapshot or "{}").get("market_context", {}).get("regime")
+                except (json.JSONDecodeError, TypeError):
+                    rg = None
+                if rg:
+                    regime_stats.setdefault(rg, []).append(1 if t.outcome == "WIN" else 0)
+            best_regime = "—"
+            best_wr = -1.0
+            for rg, outcomes in regime_stats.items():
+                if len(outcomes) >= 2:
+                    wr = sum(outcomes) / len(outcomes)
+                    if wr > best_wr:
+                        best_wr, best_regime = wr, rg
+            breakdown[strat] = {
+                "win_rate": round(wins / n, 4) if n else None,
+                "trades": n, "avg_pnl_pct": avg_pnl, "best_regime": best_regime,
+            }
+        return breakdown
+
     def get_performance_trajectory(self) -> dict:
         """Compare the last 10 closed trades' win rate to the prior 10."""
         closed = self._closed()

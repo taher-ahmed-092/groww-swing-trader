@@ -58,6 +58,8 @@ class TradeRecord(SQLModel, table=True):
     api_cost_estimate_inr: Optional[float] = None
     # Seeded demo trades must NOT drive parameter auto-tuning (cold-start protection).
     is_seeded: bool = Field(default=False)
+    # Which strategy produced this trade (momentum/mean_reversion/breakout/pairs_trading).
+    strategy_name: str = Field(default="momentum")
 
 
 class DailyJournalEntry(SQLModel, table=True):
@@ -145,6 +147,7 @@ class TradingJournal:
             thread_id=state.get("thread_id"),
             state_snapshot=json.dumps(snapshot, default=str),
             current_stop=tech.get("stop_price"),
+            strategy_name=tech.get("strategy_name") or state.get("strategy_name") or "momentum",
             outcome="OPEN",
         )
         with Session(self.engine) as session:
@@ -397,6 +400,38 @@ class TradingJournal:
             "consecutive_wins": cons_wins,
             "consecutive_losses": cons_losses,
         }
+
+    def get_open_trades(self) -> list[TradeRecord]:
+        with Session(self.engine) as session:
+            return list(session.exec(
+                select(TradeRecord).where(TradeRecord.outcome == "OPEN")
+            ).all())
+
+    def get_strategy_win_rate(self, strategy_name: str, regime: Optional[str] = None) -> Optional[float]:
+        """Win rate for a strategy (optionally within a regime). None if < 3 trades."""
+        with Session(self.engine) as session:
+            stmt = (
+                select(TradeRecord)
+                .where(TradeRecord.strategy_name == strategy_name)
+                .where(TradeRecord.outcome != "OPEN")
+            )
+            trades = list(session.exec(stmt).all())
+
+        if regime:
+            filtered = []
+            for t in trades:
+                try:
+                    snap = json.loads(t.state_snapshot or "{}")
+                    if snap.get("market_context", {}).get("regime") == regime:
+                        filtered.append(t)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            trades = filtered
+
+        if len(trades) < 3:
+            return None
+        wins = sum(1 for t in trades if t.outcome == "WIN")
+        return round(wins / len(trades), 4)
 
     # ── reads ────────────────────────────────────────────────────────────────
     def get_recent(self, n: int = 10) -> list[TradeRecord]:

@@ -14,6 +14,7 @@ from rich.console import Console
 
 from config.risk_limits import LIMITS
 from config.settings import settings
+from src.memory.journal import TradingJournal
 from src.orchestrator.state import TradeState
 from src.risk.position_sizer import PositionSizer
 
@@ -24,9 +25,10 @@ DEFAULT_PORTFOLIO_VALUE_INR = 1500.0
 
 class RiskChecker:
     def __init__(self, portfolio_value_inr: float = DEFAULT_PORTFOLIO_VALUE_INR,
-                 open_positions: int = 0) -> None:
+                 open_positions: int = 0, journal: TradingJournal | None = None) -> None:
         self.portfolio_value_inr = portfolio_value_inr
         self.open_positions = open_positions
+        self.journal = journal
 
     def _reject(self, reasons: list[str]) -> dict:
         for r in reasons:
@@ -84,6 +86,20 @@ class RiskChecker:
                 f"open positions {self.open_positions} >= max {LIMITS.max_open_positions}"
             )
 
+        # 5b. Sector diversification cap — never over-concentrate in one sector.
+        sector = state.get("sector")
+        if sector:
+            try:
+                journal = self.journal or TradingJournal()
+                same_sector = [t for t in journal.get_open_trades() if t.sector == sector]
+                if len(same_sector) >= LIMITS.max_positions_per_sector:
+                    reasons.append(
+                        f"Sector cap: already {len(same_sector)} open {sector} positions "
+                        f"(max {LIMITS.max_positions_per_sector})"
+                    )
+            except Exception:
+                pass
+
         # 6. Gut-check gate — a holistic veto beyond the checklist.
         gut = state.get("gut_check", {}) or {}
         gut_score = gut.get("gut_score", 5.0)
@@ -105,7 +121,7 @@ class RiskChecker:
             return self._reject(reasons)
 
         # 8. Dynamic position sizing (Kelly × confidence × regime).
-        sizing = PositionSizer().calculate(state, self.portfolio_value_inr)
+        sizing = PositionSizer(self.journal).calculate(state, self.portfolio_value_inr)
         quantity = sizing["quantity"]
         position_size_inr = sizing["position_size_inr"]
         if quantity < 1:

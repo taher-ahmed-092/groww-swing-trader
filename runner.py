@@ -247,6 +247,24 @@ def weekly_distillation_job() -> None:
     _run_weekly_distillation_once()  # sends the Telegram learning summary internally
 
 
+def weekly_model_retrain_job() -> None:
+    """Retrain the XGBoost signal combiner on accumulated trades (Sunday 9 PM IST)."""
+    if _kill_switch():
+        return
+    console.print("[cyan][JOB] weekly_model_retrain_job starting[/cyan]")
+    from src.ml.signal_combiner import SignalCombiner
+
+    result = SignalCombiner().train()
+    if result.get("trained"):
+        top = ", ".join(f"{f}" for f, _ in result.get("top_features", []))
+        TelegramNotifier().send_message(
+            f"🤖 Signal model retrained on {result['n_samples']} trades.\n"
+            f"Top predictors: {top}"
+        )
+    else:
+        console.print(f"[yellow][JOB] model not retrained: {result.get('message', '')}[/yellow]")
+
+
 def weekly_agent_evaluation_job() -> None:
     """Sunday 8:30 PM — measure agent accuracy + run the self-improvement enhancer."""
     if _kill_switch():
@@ -310,6 +328,7 @@ if __name__ == "__main__":
     scheduler.add_job(daily_postmarket_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
     scheduler.add_job(weekly_distillation_job, "cron", day_of_week="sun", hour=20, minute=0)
     scheduler.add_job(weekly_agent_evaluation_job, "cron", day_of_week="sun", hour=20, minute=30)
+    scheduler.add_job(weekly_model_retrain_job, "cron", day_of_week="sun", hour=21, minute=0)
     scheduler.start()
 
     try:

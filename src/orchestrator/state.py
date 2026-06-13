@@ -28,6 +28,7 @@ class TradeState(TypedDict, total=False):
     gut_check: dict                  # from GutCheckAgent (holistic assessment)
     sizing_details: dict             # from PositionSizer (Kelly/confidence/regime)
     time_window: dict                # from TradingTimeWindow (optimal entry window)
+    pairs_opportunity: dict          # market-neutral pairs setup fed into the strategy registry
 
 
 def get_initial_state(symbol: str) -> TradeState:

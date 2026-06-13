@@ -13,6 +13,7 @@ class RiskLimits:
     max_risk_per_trade_pct: float = 3.0      # % of total portfolio risked per trade
     max_position_pct: float = 20.0           # % of portfolio in one name (cap)
     max_open_positions: int = 5
+    max_positions_per_sector: int = 2        # diversification: never >2 open in one sector
     max_trades_per_week: int = 3             # increase only after paper-proven edge
 
     # ── Stops ───────────────────────────────────────────────────
