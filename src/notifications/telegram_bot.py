@@ -56,6 +56,49 @@ class TelegramNotifier:
             return
         self._call("sendMessage", {"chat_id": self.chat_id, "text": text})
 
+    def send_photo(self, png_bytes: bytes, caption: str = "") -> None:
+        """Upload a PNG (e.g. a matplotlib chart) via the Telegram HTTP API."""
+        if not self.enabled or not png_bytes:
+            return
+        try:
+            requests.post(
+                _API_BASE.format(token=self.token, method="sendPhoto"),
+                data={"chat_id": self.chat_id, "caption": caption},
+                files={"photo": ("chart.png", png_bytes, "image/png")},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            console.print(f"[yellow][TELEGRAM] sendPhoto failed: {exc}[/yellow]")
+
+    def send_performance_chart(self) -> None:
+        from dashboard.chart_generator import generate_performance_chart
+        from src.memory.journal import TradingJournal
+
+        recent = [{"symbol": t.symbol, "pnl_pct": t.pnl_pct or 0}
+                  for t in TradingJournal().get_recent(n=20) if t.outcome in ("WIN", "LOSS")]
+        self.send_photo(generate_performance_chart(recent), caption="📊 Your Performance Chart")
+
+    def send_win_chart(self) -> None:
+        from dashboard.chart_generator import generate_win_rate_chart
+        from src.analytics.performance import PerformanceAnalyzer
+
+        s = PerformanceAnalyzer().get_summary()
+        summary = {"total_trades": s.get("total_trades", 0),
+                   "win_rate": round(s.get("win_rate", 0) * 100, 1),
+                   "avg_win_pct": s.get("avg_win_pct", 0), "avg_loss_pct": s.get("avg_loss_pct", 0)}
+        self.send_photo(generate_win_rate_chart(summary), caption="🥧 Win/Loss Breakdown")
+
+    def send_dashboard_link(self) -> None:
+        if not settings.has_dashboard_token:
+            self.send_message("Dashboard not configured. Add DASHBOARD_SECRET_TOKEN to .env")
+            return
+        url = (f"http://localhost:{settings.dashboard_port}/dashboard/"
+               f"{settings.dashboard_secret_token}")
+        self.send_message(
+            f"🖥️ Your Private Dashboard\n\nLocal: {url}\n\n"
+            "For phone access, run: bash deploy/setup_cloudflare_tunnel.sh"
+        )
+
     def send_trade_card(self, state: TradeState) -> str | None:
         if not self.enabled:
             console.print("[yellow][TELEGRAM] send_trade_card skipped — notifier disabled.[/yellow]")

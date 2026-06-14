@@ -218,6 +218,30 @@ def daily_postmarket_job() -> None:
         except Exception as exc:
             console.print(f"[yellow][JOB] RCA failed for {trade.symbol}: {exc}[/yellow]")
 
+    # Forward-simulation learning loop: fill 7/14-day outcomes, promote insights.
+    try:
+        from src.learning.forward_simulator import ForwardSimulator
+        from src.memory.journal import KnowledgeEntry
+
+        sim = ForwardSimulator(journal)
+        results = sim.fill_simulation_outcomes()
+        if results["updated"] > 0:
+            console.print(f"[cyan][JOB] filled {results['updated']} sim outcomes: "
+                          f"{results['wins']}W {results['losses']}L[/cyan]")
+            for key, insight in sim.get_simulation_insights().items():
+                if isinstance(insight, dict) and insight.get("count", 0) >= 10:
+                    journal.log_knowledge_entry(KnowledgeEntry(
+                        pattern_id=f"sim-{key}",
+                        pattern_description=insight["label"],
+                        category="SIMULATION_LEARNING",
+                        confidence=min(0.3 + insight.get("win_rate", 0.5) * 0.5, 0.9),
+                        observed_count=insight["count"],
+                        is_hypothesis=insight["count"] < 20,
+                        last_seen_in_trade="forward-sim",
+                    ))
+    except Exception as exc:
+        console.print(f"[yellow][JOB] forward-sim fill failed: {exc}[/yellow]")
+
     if datetime.now().weekday() == 4:  # Friday
         notifier.send_message(PerformanceAnalyzer().get_weekly_report())
 
@@ -319,6 +343,8 @@ if __name__ == "__main__":
         "postmarket (Mon-Fri 4pm), daily learning (Mon-Fri 4:30pm), "
         "weekly distillation (Sun 8pm), agent evaluation + enhancer (Sun 8:30pm)[/green]"
     )
+    console.print("[green]Dashboard: uv run python scripts/run_dashboard.py[/green]")
+    console.print("[green]Mobile access: bash deploy/setup_cloudflare_tunnel.sh[/green]")
     console.print("[green]Press Ctrl+C to stop. KILL_SWITCH file halts all jobs immediately.[/green]")
 
     scheduler = BackgroundScheduler(timezone=TZ)

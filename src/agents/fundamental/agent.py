@@ -96,6 +96,13 @@ class FundamentalAgent:
             "profit_growth_3yr": sdata.get("profit_growth_3yr"),
             "revenue_ttm_cr": sdata.get("revenue_ttm_cr"),
             "net_profit_ttm_cr": sdata.get("net_profit_ttm_cr"),
+            # Research-backed signals (from yfinance-derived ratios).
+            "piotroski_score": yf_ratios.get("piotroski_score"),
+            "piotroski_label": yf_ratios.get("piotroski_label"),
+            "fcf_yield": yf_ratios.get("fcf_yield"),
+            "fcf_yield_label": yf_ratios.get("fcf_yield_label"),
+            "ev_ebitda": yf_ratios.get("ev_ebitda"),
+            "payout_ratio": yf_ratios.get("payout_ratio"),
         }
 
     def _trend(self, data: dict) -> str:
@@ -179,6 +186,9 @@ class FundamentalAgent:
             f"Company: {symbol} ({data.get('name')}), sector: {sector}\n"
             f"Computed numbers (authoritative, do not change):\n{data}\n"
             f"Derived: 3yr growth trend = {trend}; valuation vs sector = {pe_vs_sector}\n"
+            f"Piotroski F-Score: {data.get('piotroski_score')}/9 ({data.get('piotroski_label')})\n"
+            f"FCF Yield: {data.get('fcf_yield')} ({data.get('fcf_yield_label')}) | "
+            f"EV/EBITDA: {data.get('ev_ebitda')}x\n"
             f"SOCIAL SENTIMENT: {sentiment.get('sentiment_label')} "
             f"(score: {sentiment.get('sentiment_score'):.2f})\n"
             f"Key events: {sentiment.get('key_events')}\n"

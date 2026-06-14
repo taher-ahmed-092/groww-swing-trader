@@ -97,6 +97,28 @@ class KnowledgeEntry(SQLModel, table=True):
     pattern_age_weight: float = Field(default=1.0)  # decays as the pattern ages
 
 
+class SimulatedTrade(SQLModel, table=True):
+    """24/7 paper-learning record: what would have happened to every candidate,
+    traded or not. Outcomes are filled in 7/14 trading days later by the scheduler."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    symbol: str
+    simulated_at: datetime = Field(default_factory=_now)
+    signal: str = "SKIP"
+    strategy_name: str = "unknown"
+    regime: str = "UNKNOWN"
+    entry_price: float = 0.0
+    stop_price: float = 0.0
+    target_price: float = 0.0
+    fundamental_score: float = 0.0
+    technical_score: float = 0.0
+    judge_score: float = 0.0
+    rejection_reason: str = ""
+    outcome_7d: Optional[float] = None
+    outcome_14d: Optional[float] = None
+    would_have_won: Optional[bool] = None
+    learned_from: bool = False
+
+
 class RootCauseRecord(SQLModel, table=True):
     """Forensic record of why a trade lost. Feeds weekly distillation."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -251,6 +273,34 @@ class TradingJournal:
                 .order_by(DailyJournalEntry.date.desc())
             )
             return list(session.exec(stmt).all())
+
+    # ── Forward simulation (24/7 paper learning) ───────────────────────────────
+    def log_simulated_trade(self, **kwargs) -> SimulatedTrade:
+        sim = SimulatedTrade(**kwargs)
+        with Session(self.engine) as session:
+            session.add(sim)
+            session.commit()
+            session.refresh(sim)
+        return sim
+
+    def update_simulated_trade(self, sim: SimulatedTrade) -> SimulatedTrade:
+        with Session(self.engine) as session:
+            session.add(sim)
+            session.commit()
+            session.refresh(sim)
+        return sim
+
+    def get_simulations(self, limit: int = 500) -> list[SimulatedTrade]:
+        with Session(self.engine) as session:
+            stmt = select(SimulatedTrade).order_by(SimulatedTrade.id.desc()).limit(limit)
+            return list(session.exec(stmt).all())
+
+    def get_simulation_accuracy(self) -> dict:
+        completed = [s for s in self.get_simulations() if s.would_have_won is not None]
+        if not completed:
+            return {"count": 0, "win_rate": None}
+        wins = sum(1 for s in completed if s.would_have_won)
+        return {"count": len(completed), "win_rate": round(wins / len(completed), 4)}
 
     # ── Root Cause Analysis records ────────────────────────────────────────────
     def log_rca(self, rca: RootCauseRecord) -> RootCauseRecord:

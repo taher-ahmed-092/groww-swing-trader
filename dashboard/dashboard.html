@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Cosmic Punk — Trading Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0a0e17;--surface:#111827;--surface2:#1e2a3a;--accent:#00d4ff;--accent2:#7c3aed;
+    --green:#10b981;--red:#ef4444;--yellow:#f59e0b;--text:#e2e8f0;--muted:#64748b;--border:#1e293b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding-bottom:40px}
+  .mono{font-family:ui-monospace,monospace}
+  header{position:sticky;top:0;z-index:10;background:rgba(10,14,23,.92);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--border);padding:12px 18px;display:flex;justify-content:space-between;
+    align-items:center;flex-wrap:wrap;gap:8px}
+  header h1{font-size:18px;color:var(--accent)}
+  .mode-badge{padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;background:var(--surface2)}
+  .pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);
+    margin-right:6px;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
+  #live-clock{color:var(--muted);font-size:13px}
+  #conn{font-size:11px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;padding:14px;max-width:1200px;margin:0 auto}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;
+    animation:fadeInUp .4s ease both}
+  .panel.full{grid-column:1/-1}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px}
+  @keyframes fadeInUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+  .stat-row{display:flex;gap:12px;flex-wrap:wrap}
+  .stat{flex:1;min-width:120px;background:var(--surface2);border-radius:10px;padding:14px;text-align:center}
+  .stat .v{font-size:26px;font-weight:800;color:var(--accent)}
+  .stat .l{font-size:11px;color:var(--muted);margin-top:4px;text-transform:uppercase}
+  .green{color:var(--green)!important}.red{color:var(--red)!important}.yellow{color:var(--yellow)!important}
+  .greeting{font-size:22px;font-weight:700;margin-bottom:10px}
+  .pos{background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:10px}
+  .pos .top{display:flex;justify-content:space-between;align-items:center}
+  .pos .sym{font-size:18px;font-weight:700}
+  .badge{font-size:10px;padding:2px 8px;border-radius:10px;background:var(--accent2);color:#fff}
+  .bar{height:8px;background:#0a0e17;border-radius:6px;margin-top:8px;overflow:hidden;position:relative}
+  .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--green))}
+  .kb{background:var(--surface2);border-radius:8px;padding:10px;margin-bottom:8px;animation:fadeInUp .4s both}
+  .kb .cb{height:6px;background:#0a0e17;border-radius:6px;margin-top:6px;overflow:hidden}
+  .kb .cb>span{display:block;height:100%;background:linear-gradient(90deg,var(--yellow),var(--green))}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase}
+  .gauge-wrap{display:flex;align-items:center;gap:18px}
+  .circle{transform:rotate(-90deg)}
+  .radar{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);
+    border-radius:50%;animation:spin 1.2s linear infinite;margin:14px auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #killswitch-banner{display:none;background:var(--red);color:#fff;text-align:center;padding:8px;font-weight:700}
+  .wl-dot{display:inline-block;width:16px;height:16px;border-radius:50%;margin:2px;animation:fadeInUp .3s both}
+  .muted{color:var(--muted)}
+  .wisdom{min-height:60px;font-style:italic;font-size:15px;line-height:1.5;transition:opacity .5s}
+  .nav-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;
+    padding:4px 10px;cursor:pointer;font-size:12px}
+  @media(max-width:768px){.grid{grid-template-columns:1fr}.stat .v{font-size:22px}canvas{max-height:200px}}
+</style>
+</head>
+<body>
+<div id="killswitch-banner">🚨 KILL SWITCH ACTIVE — all trading halted</div>
+<header>
+  <h1>⚡ Cosmic Punk</h1>
+  <div><span class="pulse-dot"></span><span class="mode-badge" id="mode">—</span></div>
+  <div id="live-clock" class="mono">—</div>
+  <div id="conn">● connecting…</div>
+</header>
+
+<div class="grid">
+  <!-- 1 Overview -->
+  <div class="panel full">
+    <div class="greeting">Welcome back, <span id="owner">__OWNER_NAME__</span> 👋</div>
+    <div class="stat-row">
+      <div class="stat"><div class="v" id="total-trades">0</div><div class="l">Total Trades</div></div>
+      <div class="stat"><div class="v" id="win-rate-num">0%</div><div class="l">Win Rate</div></div>
+      <div class="stat"><div class="v" id="total-pnl">₹0</div><div class="l">Total P&amp;L</div></div>
+      <div class="stat"><div class="v" id="api-status">—</div><div class="l">API</div></div>
+    </div>
+  </div>
+
+  <!-- 2 Win rate gauge -->
+  <div class="panel">
+    <h2>Win Rate</h2>
+    <div class="gauge-wrap">
+      <svg width="120" height="120" class="circle">
+        <circle cx="60" cy="60" r="54" fill="none" stroke="#1e293b" stroke-width="10"/>
+        <circle id="gauge-arc" cx="60" cy="60" r="54" fill="none" stroke="#f59e0b" stroke-width="10"
+          stroke-linecap="round" stroke-dasharray="339.292" stroke-dashoffset="339.292"
+          style="transition:stroke-dashoffset 1s ease,stroke .5s"/>
+      </svg>
+      <div>
+        <div id="gauge-text" style="font-size:30px;font-weight:800">0%</div>
+        <div class="muted" id="gauge-sub">Avg Win — | Avg Loss — | Exp ₹—</div>
+        <div id="trajectory" style="margin-top:6px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 Market intelligence -->
+  <div class="panel">
+    <h2>Market Intelligence</h2>
+    <div id="regime-badge" style="font-size:18px;font-weight:700">—</div>
+    <div class="muted" id="regime-strategy" style="margin-top:6px">—</div>
+    <div class="muted" id="regime-size" style="margin-top:6px">—</div>
+  </div>
+
+  <!-- 3 Positions -->
+  <div class="panel full">
+    <h2>Open Positions</h2>
+    <div id="positions"><div class="radar"></div><div class="muted" style="text-align:center">😴 Scanning for opportunities…</div></div>
+  </div>
+
+  <!-- 4 P&L chart -->
+  <div class="panel full">
+    <h2>P&amp;L History — last 30 trades</h2>
+    <canvas id="pnl-chart" height="120"></canvas>
+  </div>
+
+  <!-- 5 Win/loss pattern -->
+  <div class="panel">
+    <h2>Win / Loss Pattern</h2>
+    <div id="wl-pattern"></div>
+    <div id="streak" style="margin-top:8px;font-weight:700"></div>
+  </div>
+
+  <!-- 9 Simulation insights -->
+  <div class="panel">
+    <h2>📊 Simulation Insights</h2>
+    <div id="sim-insight" class="wisdom">Accumulating 24/7 learning data…</div>
+  </div>
+
+  <!-- 7 Knowledge base -->
+  <div class="panel full">
+    <h2>🧠 What the System Has Learned</h2>
+    <div id="knowledge"><div class="muted">Knowledge base empty — learning begins after first trades.</div></div>
+  </div>
+
+  <!-- 8 Strategy performance -->
+  <div class="panel full">
+    <h2>Strategy Performance</h2>
+    <table><thead><tr><th>Strategy</th><th>Trades</th><th>Win Rate</th><th>Avg P&amp;L</th><th>Best Regime</th></tr></thead>
+    <tbody id="strategies"></tbody></table>
+  </div>
+
+  <!-- 10 Rotating wisdom -->
+  <div class="panel full">
+    <h2>Wisdom</h2>
+    <div id="wisdom" class="wisdom">Signal over noise. Always.</div>
+    <div style="margin-top:8px"><button class="nav-btn" onclick="cycleWisdom(-1)">‹ Prev</button>
+      <button class="nav-btn" onclick="cycleWisdom(1)">Next ›</button></div>
+  </div>
+
+  <!-- 11 System status -->
+  <div class="panel full">
+    <h2>System Status</h2>
+    <div class="muted" id="sysstatus">—</div>
+    <div style="margin-top:6px"><a href="https://github.com/taher-ahmed-092/groww-swing-trader"
+      style="color:var(--accent)">GitHub repo →</a></div>
+  </div>
+</div>
+
+<script>
+const TOKEN="__DASHBOARD_TOKEN__";
+const WS_PROTO=location.protocol==="https:"?"wss":"ws";
+const WS_URL=`${WS_PROTO}://${location.host}/ws/${TOKEN}`;
+let ws=null,pnlChart=null,lastData=null;
+
+const TIPS=["The machine never sleeps. Neither does your edge.","Every rejection is capital saved.",
+  "Signal over noise. Always.","In downtrends we wait. In uptrends we hunt.",
+  "Patience encoded. Discipline automated.","Numbers don't lie. Patterns don't forget."];
+let wisdomItems=[],wisdomIdx=0;
+
+function setConn(s){const e=document.getElementById("conn");
+  e.textContent=s==="connected"?"● live":"● reconnecting…";
+  e.style.color=s==="connected"?"var(--green)":"var(--yellow)";}
+
+function connect(){
+  ws=new WebSocket(WS_URL);
+  ws.onopen=()=>setConn("connected");
+  ws.onmessage=e=>{try{updateDashboard(JSON.parse(e.data))}catch(_){}};
+  ws.onclose=()=>{setConn("reconnecting");setTimeout(connect,3000)};
+  ws.onerror=()=>ws.close();
+}
+
+function updateClock(){
+  const ist=new Intl.DateTimeFormat('en-IN',{timeZone:'Asia/Kolkata',hour12:false,
+    hour:'2-digit',minute:'2-digit',second:'2-digit',weekday:'short',day:'numeric',
+    month:'short'}).format(new Date());
+  document.getElementById('live-clock').textContent=ist+' IST';
+}
+setInterval(updateClock,1000);updateClock();
+
+function animateCounter(el,newValue,duration=700,prefix='',suffix=''){
+  const start=parseFloat(el.dataset.value||0),end=parseFloat(newValue)||0,t0=performance.now();
+  function step(t){const p=Math.min((t-t0)/duration,1),e=1-Math.pow(1-p,3),c=start+(end-start)*e;
+    el.textContent=prefix+c.toFixed(1)+suffix;el.dataset.value=c;
+    if(p<1)requestAnimationFrame(step);else el.textContent=prefix+end.toFixed(1)+suffix;}
+  requestAnimationFrame(step);
+}
+
+function updateGauge(pct){
+  const circ=2*Math.PI*54,arc=(pct/100)*circ;
+  const color=pct>=55?'#10b981':pct>=45?'#f59e0b':'#ef4444';
+  const a=document.getElementById('gauge-arc');
+  a.style.strokeDashoffset=circ-arc;a.style.stroke=color;
+  document.getElementById('gauge-text').textContent=pct.toFixed(1)+'%';
+}
+
+function updatePositions(positions){
+  const c=document.getElementById('positions');
+  if(!positions||!positions.length){
+    c.innerHTML='<div class="radar"></div><div class="muted" style="text-align:center">😴 Scanning for opportunities…</div>';return;}
+  c.innerHTML=positions.map(p=>{
+    const span=(p.target-p.entry)||1,prog=Math.max(0,Math.min(100,(p.current-p.entry)/span*100));
+    const cls=p.pnl_pct>=0?'green':'red';
+    return `<div class="pos"><div class="top"><span class="sym">${p.symbol}</span>
+      <span class="badge">${p.strategy}</span></div>
+      <div class="mono">₹${p.entry} → ₹${p.current}
+      <span class="${cls}" style="font-size:18px;font-weight:700;float:right">${p.pnl_pct>=0?'+':''}${p.pnl_pct}%</span></div>
+      <div class="bar"><span style="width:${prog}%"></span></div>
+      <div class="muted" style="font-size:11px;margin-top:4px">🎯 ₹${p.target} · 🛑 ₹${p.stop} · Day ${p.days_held}</div></div>`;
+  }).join('');
+}
+
+function updatePnlChart(h){
+  const labels=h.map(d=>d.symbol+' '+d.date),data=h.map(d=>d.pnl);
+  const colors=data.map(d=>d>=0?'#10b981':'#ef4444');
+  if(pnlChart){pnlChart.data.labels=labels;pnlChart.data.datasets[0].data=data;
+    pnlChart.data.datasets[0].backgroundColor=colors;pnlChart.update();return;}
+  pnlChart=new Chart(document.getElementById('pnl-chart').getContext('2d'),{
+    type:'bar',data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:4}]},
+    options:{responsive:true,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#64748b',font:{size:9}}},
+              y:{ticks:{color:'#64748b'},grid:{color:'#1e293b'}}}}});
+}
+
+function updateWL(wl){
+  const c=document.getElementById('wl-pattern');
+  c.innerHTML=(wl||[]).slice(0,20).reverse().map((t,i)=>
+    `<span class="wl-dot" title="${t.symbol}" style="background:${t.outcome==='WIN'?'#10b981':'#ef4444'};animation-delay:${i*40}ms"></span>`).join('');
+  let streak=0,kind=null;
+  for(const t of (wl||[])){if(kind===null)kind=t.outcome;if(t.outcome===kind)streak++;else break;}
+  const s=document.getElementById('streak');
+  if(kind==='WIN'&&streak>=3)s.innerHTML=`🔥 ${streak} wins in a row!`;
+  else if(kind)s.textContent=`Current streak: ${streak} ${kind.toLowerCase()}${streak>1?'es':''}`;
+  else s.textContent='';
+}
+
+function updateKnowledge(kb){
+  const c=document.getElementById('knowledge');
+  if(!kb||!kb.length){c.innerHTML='<div class="muted">Knowledge base empty — learning begins after first trades.</div>';return;}
+  c.innerHTML=kb.map((e,i)=>`<div class="kb" style="animation-delay:${i*50}ms">
+    <div><span class="badge">${e.category}</span> ${e.description}</div>
+    <div class="cb"><span style="width:${e.confidence*100}%"></span></div>
+    <div class="muted" style="font-size:11px;margin-top:3px">${e.count}× observed · ${e.is_hypothesis?'hypothesis':'rule'} · ${(e.confidence*100).toFixed(0)}%</div></div>`).join('');
+}
+
+const REGIME_ICON={BULL_TRENDING:'🐂',BEAR_TRENDING:'🐻',VOLATILE:'🌀',RANGE_BOUND:'↔️',RECOVERY:'🌱',TRANSITIONAL:'🔄'};
+function updateRegime(r){
+  if(!r)return;
+  document.getElementById('regime-badge').textContent=`${REGIME_ICON[r.regime]||'❔'} ${r.regime}`;
+  document.getElementById('regime-strategy').textContent='System recommends: '+(r.strategy||'—');
+  document.getElementById('regime-size').textContent='Position sizing at '+((r.size_multiplier||1))+'× capacity';
+}
+
+function updateStrategies(sb){
+  const t=document.getElementById('strategies');
+  if(!sb||!Object.keys(sb).length){t.innerHTML='<tr><td colspan="5" class="muted">No data yet</td></tr>';return;}
+  t.innerHTML=Object.entries(sb).map(([name,d])=>{
+    const wr=d.win_rate!=null?(d.win_rate*100).toFixed(0)+'%':'—';
+    const cls=d.win_rate==null?'muted':d.win_rate>=0.55?'green':d.win_rate>=0.45?'yellow':'red';
+    return `<tr><td>${name}</td><td>${d.trades}</td><td class="${cls}">${wr}</td>
+      <td>${(d.avg_pnl_pct>=0?'+':'')+d.avg_pnl_pct}%</td><td>${d.best_regime}</td></tr>`;}).join('');
+}
+
+function updateSimInsights(si){
+  const e=document.getElementById('sim-insight');
+  if(!si||si.status==='not_enough_data'){
+    e.textContent=`Accumulating 24/7 learning data… (${(si&&si.count)||0} simulations so far)`;return;}
+  const labels=Object.values(si).filter(v=>v&&v.label).map(v=>v.label);
+  if(!labels.length){e.textContent='Accumulating learning data…';return;}
+  let i=0;e.textContent=labels[0];
+  clearInterval(window._simRot);
+  window._simRot=setInterval(()=>{i=(i+1)%labels.length;
+    e.style.opacity=0;setTimeout(()=>{e.textContent=labels[i];e.style.opacity=1},300);},10000);
+}
+
+function buildWisdom(d){
+  const items=[...TIPS];
+  if(d.summary&&d.summary.total_trades>0)
+    items.push(`You've placed ${d.summary.total_trades} trades with a ${d.summary.win_rate}% win rate.`);
+  if(d.trajectory&&d.trajectory.context_sentence)items.push(d.trajectory.context_sentence);
+  if(d.regime)items.push(`Market regime: ${d.regime.regime}. The system adapts its strategy automatically.`);
+  return items;
+}
+function renderWisdom(){if(!wisdomItems.length)return;
+  const e=document.getElementById('wisdom');e.style.opacity=0;
+  setTimeout(()=>{e.textContent=wisdomItems[wisdomIdx];e.style.opacity=1},300);}
+function cycleWisdom(dir){if(!wisdomItems.length)return;
+  wisdomIdx=(wisdomIdx+dir+wisdomItems.length)%wisdomItems.length;renderWisdom();}
+setInterval(()=>cycleWisdom(1),30000);
+
+function updateDashboard(d){
+  if(d.error){document.getElementById('conn').textContent='● error';return;}
+  lastData=d;
+  document.getElementById('mode').textContent=d.mode||'—';
+  document.getElementById('owner').textContent=d.owner||'Trader';
+  document.getElementById('api-status').textContent=d.api_active?'✅':'🧪';
+  const s=d.summary;
+  animateCounter(document.getElementById('total-trades'),s.total_trades,400);
+  animateCounter(document.getElementById('win-rate-num'),s.win_rate,600,'','%');
+  animateCounter(document.getElementById('total-pnl'),s.total_pnl_inr,800,'₹','');
+  updateGauge(s.win_rate);
+  document.getElementById('gauge-sub').textContent=
+    `Avg Win +${s.avg_win_pct}% | Avg Loss ${s.avg_loss_pct}% | Exp ₹${s.expectancy}`;
+  if(d.trajectory)document.getElementById('trajectory').textContent=
+    (d.trajectory.trajectory_emoji||'')+' '+(d.trajectory.trajectory||'');
+  updatePositions(d.positions);updatePnlChart(d.pnl_history||[]);updateWL(d.wl_chart);
+  updateKnowledge(d.knowledge);updateRegime(d.regime);updateStrategies(d.strategy_breakdown);
+  updateSimInsights(d.sim_insights);
+  document.getElementById('sysstatus').textContent=
+    `Mode ${d.mode} · Broker ${d.broker} · KB ${(d.knowledge||[]).length} shown · Updated ${(d.timestamp||'').slice(11,19)} IST`;
+  wisdomItems=buildWisdom(d);
+  document.getElementById('killswitch-banner').style.display=d.kill_switch?'block':'none';
+}
+
+connect();
+</script>
+</body>
+</html>

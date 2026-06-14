@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     finnhub_api_key: str = Field(default="")
     news_api_key: str = Field(default="")
 
+    # Dashboard (read-only web view, secured by a secret token in the URL path)
+    dashboard_secret_token: str = Field(default="")
+    dashboard_owner_name: str = Field(default="Trader")
+    dashboard_port: int = Field(default=8765)
+
     # Telegram (optional — remote trade approval from your phone)
     telegram_bot_token: str = Field(default="")
     telegram_chat_id: str = Field(default="")
@@ -54,6 +59,10 @@ class Settings(BaseSettings):
     @property
     def has_finnhub(self) -> bool:
         return bool(self.finnhub_api_key)
+
+    @property
+    def has_dashboard_token(self) -> bool:
+        return bool(self.dashboard_secret_token)
 
     @property
     def has_anthropic_key(self) -> bool:

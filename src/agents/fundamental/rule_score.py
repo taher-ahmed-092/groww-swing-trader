@@ -79,7 +79,31 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     elif pe is not None and pe > 60:
         weaknesses.append(f"Expensive P/E {pe}")
 
-    score = round(points / 10.0, 4)
+    # Piotroski F-Score (research-backed financial health).
+    pscore = data.get("piotroski_score")
+    if pscore is not None:
+        if pscore >= 7:
+            points += 2
+            strengths.append(f"Strong Piotroski (F={pscore})")
+        elif pscore >= 4:
+            points += 1
+        elif pscore <= 3:
+            points -= 1
+            weaknesses.append(f"Weak Piotroski (F={pscore})")
+
+    # FCF yield (Buffett's valuation read).
+    fcf_yield = _f(data.get("fcf_yield"))
+    if fcf_yield is not None:
+        if fcf_yield > 0.08:
+            points += 1.5
+            strengths.append(f"High FCF yield ({fcf_yield:.1%})")
+        elif fcf_yield > 0.05:
+            points += 1
+        elif fcf_yield < 0.02:
+            weaknesses.append(f"Low FCF yield ({fcf_yield:.1%})")
+
+    # Normalize to 0-1 (clamp — extra signals can push points past 10).
+    score = round(max(0.0, min(1.0, points / 10.0)), 4)
 
     if score >= 0.7:
         moat_strength = "STRONG"

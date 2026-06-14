@@ -32,6 +32,7 @@ from src.analytics.performance import PerformanceAnalyzer
 from src.data.market_context import MarketContext
 from src.data.regime_detector import RegimeDetector
 from src.judge.evaluator import LLMJudge
+from src.learning.forward_simulator import ForwardSimulator
 from src.memory.journal import TradingJournal
 from src.memory.lessons import LessonsRetriever
 from src.memory.rca import RootCauseAnalyzer
@@ -224,6 +225,21 @@ def analytics_node(state: TradeState) -> dict:
         errors = list(state.get("errors", []))
         errors.append(msg)
         update["errors"] = errors
+
+    # 24/7 forward learning: log every candidate (traded or not) for outcome tracking.
+    result = state.get("trade_result", {}) or {}
+    status = result.get("status", "")
+    decision = "EXECUTED" if status in ("PAPER_FILLED", "LIVE_PLACED") else "REJECTED"
+    risk = state.get("risk_check", {}) or {}
+    rejection_reason = ""
+    if decision == "REJECTED":
+        reasons = risk.get("reasons") or state.get("errors") or [""]
+        rejection_reason = reasons[0] if reasons else ""
+    try:
+        ForwardSimulator().log_candidate(state, decision=decision,
+                                         rejection_reason=rejection_reason)
+    except Exception as exc:
+        console.print(f"[yellow]Forward simulation log failed: {exc}[/yellow]")
     return update
 
 

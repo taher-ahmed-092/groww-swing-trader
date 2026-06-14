@@ -214,4 +214,8 @@ class ScreenerScraper:
         if roce is not None and roce < 10:
             rejects.append(f"Poor capital efficiency (ROCE {roce}%)")
 
+        piotroski = data.get("piotroski_score")
+        if piotroski is not None and piotroski <= 2:
+            rejects.append(f"Extremely weak financials (Piotroski F={piotroski}/9)")
+
         return rejects
