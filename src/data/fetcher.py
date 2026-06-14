@@ -42,10 +42,29 @@ class MarketDataFetcher:
             df = df.dropna(subset=["Close"])
             if df.empty:
                 return None
+            if not self._is_valid(df):
+                log.debug("Skipping %s: failed data validation", symbol)
+                return None
             return df
         except Exception as exc:  # any failure → quiet skip, never raise
             log.debug("Skipping %s: %s", symbol, exc)
             return None
+
+    @staticmethod
+    def _is_valid(df: pd.DataFrame) -> bool:
+        """Reject obviously corrupt data: NaN closes, absurd jumps, dead volume."""
+        try:
+            tail = df.tail(5)
+            if tail["Close"].isna().any():
+                return False
+            moves = df["Close"].pct_change().abs().dropna()
+            if not moves.empty and moves.max() > 0.25:  # single-day >25% = bad data
+                return False
+            if (tail["Volume"].fillna(0) <= 0).all():  # all-zero volume = stale/bad
+                return False
+            return True
+        except Exception:
+            return True  # validation must never block on its own error
 
     def get_fundamentals(self, symbol: str) -> dict | None:
         try:

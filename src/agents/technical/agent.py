@@ -17,7 +17,7 @@ from src.agents.technical.indicators import compute_indicators
 from src.agents.technical.rule_score import rule_based_technical_score
 from src.data.fetcher import MarketDataFetcher
 from src.data.market_context import MarketContext
-from src.llm import get_llm, parse_json_response
+from src.llm import cached_llm_call, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 from src.strategies.registry import StrategyRegistry
@@ -102,6 +102,12 @@ class TechnicalAgent:
         if indicators.get("adx_signal") == "CHOPPY":
             flags.append("CHOPPY_MARKET")
 
+        # Circuit-breaker volatility risk (HIGH → halve size downstream).
+        from src.risk.circuit_breaker_check import CircuitBreakerRisk
+        circuit = CircuitBreakerRisk().assess_risk(symbol, df)
+        if circuit.get("risk_level") == "HIGH":
+            flags.append("HIGH_VOLATILITY")
+
         # Optimal entry window (used for countdown + auto-cancel-if-missed).
         provisional = {"signal": "BUY", "indicators": indicators}
         time_window = TradingTimeWindow().compute_entry_window(provisional, state)
@@ -115,6 +121,7 @@ class TechnicalAgent:
             "entry_recommendation": entry_recommendation,
             "time_window": time_window,
             "strategy_name": strategy_name,
+            "circuit_breaker": circuit,
             "flags": flags,
         }
 
@@ -203,8 +210,7 @@ class TechnicalAgent:
         )
 
         try:
-            resp = get_llm(temperature=0).invoke([("system", system), ("human", prompt)])
-            verdict = parse_json_response(getattr(resp, "content", "") or "")
+            verdict = parse_json_response(cached_llm_call(system, prompt))
         except Exception as exc:
             console.print(f"[yellow]Technical LLM call failed: {exc}[/yellow]")
             verdict = {}

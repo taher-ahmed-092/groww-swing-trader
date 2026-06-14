@@ -65,7 +65,9 @@ class ExecutorAgent:
         if settings.broker_mode == "live":
             notifier = TelegramNotifier()
             notifier.send_trade_card(state)
-            approved = notifier.wait_for_approval(settings.auto_approve_timeout_seconds)
+            approved = notifier.wait_for_approval(
+                settings.auto_approve_timeout_seconds, symbol=state.get("symbol", "")
+            )
             if not approved:
                 console.print("[red][EXECUTOR] Trade rejected at human approval gate.[/red]")
                 return {

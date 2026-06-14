@@ -124,6 +124,17 @@ class RiskChecker:
         sizing = PositionSizer(self.journal).calculate(state, self.portfolio_value_inr)
         quantity = sizing["quantity"]
         position_size_inr = sizing["position_size_inr"]
+
+        # Circuit-breaker volatility: halve size on HIGH-risk names (still ≥1 share).
+        cb_factor = (technical.get("circuit_breaker", {}) or {}).get("size_factor", 1.0)
+        if cb_factor < 1.0 and entry_price:
+            position_size_inr = round(position_size_inr * cb_factor, 2)
+            quantity = max(1, int(position_size_inr / entry_price))
+            sizing["position_size_inr"] = position_size_inr
+            sizing["quantity"] = quantity
+            sizing["sizing_explanation"] = (
+                sizing.get("sizing_explanation", "") + f" | circuit-breaker ×{cb_factor}")
+
         if quantity < 1:
             reasons.append("dynamic sizing produced < 1 share — entry price too high for capital.")
             return self._reject(reasons)

@@ -16,7 +16,7 @@ from src.agents.fundamental.rule_score import rule_based_fundamental_score
 from src.agents.sentiment.agent import SocialSentimentAgent
 from src.data.fetcher import MarketDataFetcher
 from src.data.screener import ScreenerScraper
-from src.llm import get_llm, parse_json_response
+from src.llm import cached_llm_call, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 
@@ -170,6 +170,17 @@ class FundamentalAgent:
             verdict.update(base_extra)
             return self._apply_sentiment(verdict, sentiment)
 
+        # Batch cache: a Saturday-night batch result (≈50% cheaper) costs ₹0 to reuse.
+        try:
+            from src.batch.weekly_research_batch import WeeklyResearchBatch
+
+            cached = WeeklyResearchBatch().get_batch_fundamental(symbol)
+        except Exception:
+            cached = None
+        if cached:
+            cached.update(base_extra)
+            return self._apply_sentiment(cached, sentiment)
+
         # Context blocks injected at the TOP of the prompt (before stock-specific data).
         knowledge_context = state.get("knowledge_context") or ""
         lessons = state.get("lessons") or self.lessons.get_relevant_lessons(symbol, sector)
@@ -211,8 +222,7 @@ class FundamentalAgent:
         )
 
         try:
-            resp = get_llm(temperature=0).invoke([("system", system), ("human", prompt)])
-            verdict = parse_json_response(getattr(resp, "content", "") or "")
+            verdict = parse_json_response(cached_llm_call(system, prompt))
         except Exception as exc:
             console.print(f"[yellow]Fundamental LLM call failed: {exc}[/yellow]")
             verdict = {}

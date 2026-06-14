@@ -1,13 +1,16 @@
 """
-Telegram notifier — remote trade approval and alerts from your phone.
+Telegram notifier — alerts, trade cards with inline keyboards, and remote approval.
 
-Implemented over the Telegram Bot HTTP API with `requests` (synchronous), which
-fits the polling approval model cleanly. Fully optional: if TELEGRAM_BOT_TOKEN /
-TELEGRAM_CHAT_ID are not set, every method degrades gracefully and never raises.
+All SENDS use synchronous HTTP (requests) so they work from sync LangGraph nodes
+with no event-loop conflicts. Incoming /commands are handled separately by
+command_handler.CommandHandler (a background polling thread). Fully optional: with
+no token configured every method degrades gracefully and never raises.
 """
 from __future__ import annotations
 
+import random
 import time
+from pathlib import Path
 
 import requests
 from rich.console import Console
@@ -19,6 +22,7 @@ console = Console()
 
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _POLL_INTERVAL_SECONDS = 5
+_EMOJIS = ["📊", "📈", "🎯", "💹", "🔔", "⚡", "🌟"]
 
 
 class TelegramNotifier:
@@ -26,21 +30,17 @@ class TelegramNotifier:
         self.token = settings.telegram_bot_token
         self.chat_id = settings.telegram_chat_id
         self.enabled = bool(self.token and self.chat_id)
-        if not self.enabled:
-            console.print(
-                "[yellow][TELEGRAM] Disabled (no TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID).[/yellow]"
-            )
+
+    def is_configured(self) -> bool:
+        return self.enabled
 
     # ── low-level ──────────────────────────────────────────────────────────────
     def _call(self, method: str, params: dict, timeout: int = 15) -> dict | None:
         if not self.token:
             return None
         try:
-            resp = requests.post(
-                _API_BASE.format(token=self.token, method=method),
-                json=params,
-                timeout=timeout,
-            )
+            resp = requests.post(_API_BASE.format(token=self.token, method=method),
+                                 json=params, timeout=timeout)
             data = resp.json()
             if not data.get("ok"):
                 console.print(f"[yellow][TELEGRAM] {method} not ok: {data.get('description')}[/yellow]")
@@ -50,25 +50,31 @@ class TelegramNotifier:
             console.print(f"[yellow][TELEGRAM] {method} failed: {exc}[/yellow]")
             return None
 
-    # ── public API ─────────────────────────────────────────────────────────────
-    def send_message(self, text: str) -> None:
+    # ── sends ────────────────────────────────────────────────────────────────
+    def send_message(self, text: str) -> bool:
         if not self.enabled:
-            return
-        self._call("sendMessage", {"chat_id": self.chat_id, "text": text})
+            return False
+        result = self._call("sendMessage", {"chat_id": self.chat_id, "text": text,
+                                            "parse_mode": "Markdown"})
+        if result is None:
+            # Retry once without Markdown (a stray * / _ can make Telegram 400).
+            result = self._call("sendMessage", {"chat_id": self.chat_id, "text": text})
+        return result is not None
 
-    def send_photo(self, png_bytes: bytes, caption: str = "") -> None:
-        """Upload a PNG (e.g. a matplotlib chart) via the Telegram HTTP API."""
-        if not self.enabled or not png_bytes:
-            return
+    def send_photo(self, image_bytes: bytes, caption: str = "") -> bool:
+        if not self.enabled or not image_bytes:
+            return False
         try:
-            requests.post(
+            r = requests.post(
                 _API_BASE.format(token=self.token, method="sendPhoto"),
                 data={"chat_id": self.chat_id, "caption": caption},
-                files={"photo": ("chart.png", png_bytes, "image/png")},
+                files={"photo": ("chart.png", image_bytes, "image/png")},
                 timeout=30,
             )
+            return r.status_code == 200
         except requests.RequestException as exc:
             console.print(f"[yellow][TELEGRAM] sendPhoto failed: {exc}[/yellow]")
+            return False
 
     def send_performance_chart(self) -> None:
         from dashboard.chart_generator import generate_performance_chart
@@ -99,62 +105,108 @@ class TelegramNotifier:
             "For phone access, run: bash deploy/setup_cloudflare_tunnel.sh"
         )
 
-    def send_trade_card(self, state: TradeState) -> str | None:
-        if not self.enabled:
-            console.print("[yellow][TELEGRAM] send_trade_card skipped — notifier disabled.[/yellow]")
-            return None
+    # ── trade card ─────────────────────────────────────────────────────────────
+    def _build_trade_card_text(self, state: dict) -> str:
+        tech = state.get("technical_verdict", {}) or {}
+        fund = state.get("fundamental_verdict", {}) or {}
+        judge = state.get("judge_verdict", {}) or {}
+        gut = state.get("gut_check", {}) or {}
+        sizing = state.get("risk_check", {}) or {}
+        tw = tech.get("time_window", {}) or {}
 
-        fundamental = state.get("fundamental_verdict", {})
-        technical = state.get("technical_verdict", {})
-        judge = state.get("judge_verdict", {})
+        entry = tech.get("entry_price", 0) or 0
+        stop = tech.get("stop_price", 0) or 0
+        target = tech.get("target_price", 0) or 0
+        rr = ((target - entry) / (entry - stop)) if (entry - stop) > 0 else 0
+        score = judge.get("overall_score", 0) or 0
+        bar = "█" * round(score) + "░" * (10 - round(score))
 
-        entry = technical.get("entry_price") or 0
-        stop = technical.get("stop_price") or 0
-        target = technical.get("target_price") or 0
-        rr = round((target - entry) / (entry - stop), 2) if (entry - stop) else "n/a"
+        try:
+            from src.utils.summarizer import TradeSummarizer
+            summary = TradeSummarizer().rule_based_summary(state)
+        except Exception:
+            summary = ""
+        try:
+            from src.utils.tips import get_contextual_tip
+            tip = get_contextual_tip(tech.get("signal"),
+                                     state.get("market_context", {}).get("nifty_trend"),
+                                     judge.get("flags", []))
+        except Exception:
+            tip = ""
 
-        mode = "LIVE" if settings.broker_mode == "live" else "PAPER"
-        approved = "✅ APPROVED" if judge.get("approved") else "❌ NOT APPROVED"
-        flags = judge.get("flags") or []
-        flags_str = ", ".join(flags) if flags else "None"
+        def pct(n):
+            return (n / entry * 100) if entry else 0
 
+        f5 = round((fund.get("score", 0) or 0) * 5)
+        t5 = round((tech.get("score", 0) or 0) * 5)
         lines = [
-            f"📊 TRADE PROPOSAL — {state.get('symbol')}",
-            f"Mode: {mode}",
-            "─────────────────",
-            f"Fundamental: {fundamental.get('score')}/1.0 — {fundamental.get('moat', 'n/a')}",
-            (
-                f"Technical: {technical.get('signal')} {technical.get('score')}/1.0 — "
-                f"Entry ₹{entry} | Stop ₹{stop} | Target ₹{target}"
-            ),
-            f"R:R Ratio: {rr}",
-            f"Judge: {approved} | Confidence: {judge.get('score') or judge.get('overall_score')}",
-            f"Flags: {flags_str}",
-            "─────────────────",
+            f"{random.choice(_EMOJIS)} *TRADE PROPOSAL*",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📌 *{state.get('symbol', '')}*  {state.get('sector', '')}  "
+            f"{str(state.get('market_context', {}).get('regime', ''))[:10]}",
+            f"{settings.mode_label}",
+            "",
+            "🧠 *SUMMARY*", f"_{summary}_", "",
+            f"📊 *CONFIDENCE*  {bar}  *{score:.1f}/10*", "",
+            f"💰 Entry: ₹{entry:,.2f}",
+            f"🛑 Stop:  ₹{stop:,.2f}  _(-{pct(entry - stop):.1f}%)_",
+            f"🎯 Target: ₹{target:,.2f}  _(+{pct(target - entry):.1f}%)_",
+            f"📐 R:R 1:{rr:.1f}  💸 ₹{sizing.get('position_size_inr', 0):.0f}  "
+            f"_{sizing.get('confidence_tier', '')}_",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📈 Fund  {'▓' * f5}{'░' * (5 - f5)}  {fund.get('score', 0) or 0:.2f}",
+            f"🔧 Tech  {'▓' * t5}{'░' * (5 - t5)}  {tech.get('score', 0) or 0:.2f}  [{tech.get('signal', '')}]",
+            f"🧑‍⚖️ Judge  {score:.1f}/10",
+            f"🤔 Gut  {gut.get('gut_score', 0):.1f}/10  —  {gut.get('gut_verdict', '')}",
         ]
+        flags = [f for f in judge.get("flags", []) if f != "DEMO_MODE"]
+        lines.append(f"⚠️ Flags: {', '.join(flags[:3])}" if flags else "✅ No flags")
         if state.get("manually_requested"):
-            lines.append("⚠️ MANUALLY REQUESTED (anti-emotional flag)")
-            lines.append("─────────────────")
-        lines.append("Reply /approve or /reject within 30 min. No reply = auto-reject.")
+            lines.append("🔴 *MANUALLY REQUESTED — emotional check*")
+        if tw.get("countdown_display"):
+            lines += ["", tw["countdown_display"]]
+        lines += ["", f"💡 _{tip}_",
+                  f"⏰ _Auto-rejects in {settings.auto_approve_timeout_seconds // 60}min_"]
+        return "\n".join(lines)
 
-        result = self._call("sendMessage", {"chat_id": self.chat_id, "text": "\n".join(lines)})
-        if result:
-            return str(result.get("result", {}).get("message_id"))
-        return None
+    def send_trade_card_with_keyboard(self, state: dict) -> str | None:
+        if not self.enabled:
+            return None
+        text = self._build_trade_card_text(state)
+        symbol = state.get("symbol", "")
+        size = (state.get("risk_check", {}) or {}).get("position_size_inr", 500) or 500
+        keyboard = {"inline_keyboard": [
+            [{"text": f"✅ Approve ₹{size:.0f}", "callback_data": f"approve:{symbol}"},
+             {"text": "❌ Reject", "callback_data": f"reject:{symbol}"}],
+            [{"text": "🔍 Details", "callback_data": f"details:{symbol}"},
+             {"text": "⏰ Snooze 30m", "callback_data": f"snooze:{symbol}"}],
+            [{"text": "🚫 Kill Switch", "callback_data": "kill"},
+             {"text": "📊 Positions", "callback_data": "positions"}],
+        ]}
+        result = self._call("sendMessage", {
+            "chat_id": self.chat_id, "text": text, "parse_mode": "Markdown",
+            "reply_markup": keyboard,
+        })
+        if result is None:  # Markdown fallback
+            result = self._call("sendMessage", {
+                "chat_id": self.chat_id, "text": text, "reply_markup": keyboard})
+        return str(result["result"]["message_id"]) if result else None
 
-    def wait_for_approval(self, timeout_seconds: int = 1800) -> bool:
-        # No bot configured: paper convenience or CLI fallback.
+    # Backward-compatible name used by the executor node.
+    def send_trade_card(self, state: TradeState) -> str | None:
+        return self.send_trade_card_with_keyboard(dict(state))
+
+    # ── approval (sync — safe from LangGraph nodes) ─────────────────────────────
+    def wait_for_approval(self, timeout_seconds: int = 1800, symbol: str = "") -> bool:
         if not self.enabled:
             if settings.auto_approve_if_no_telegram:
                 console.print("[yellow][TELEGRAM] No bot — auto-approving (paper convenience).[/yellow]")
                 return True
             try:
-                answer = input("Approve trade? [y/N]: ").strip().lower()
+                return input("Approve trade? [y/N]: ").strip().lower() in ("y", "yes")
             except EOFError:
                 return False
-            return answer in ("y", "yes")
 
-        # Establish a baseline so we only react to NEW replies.
         baseline = self._call("getUpdates", {"timeout": 0}, timeout=20)
         offset = 0
         if baseline and baseline.get("result"):
@@ -163,17 +215,26 @@ class TelegramNotifier:
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             data = self._call("getUpdates", {"offset": offset, "timeout": 10}, timeout=20)
-            if data and data.get("result"):
-                for update in data["result"]:
-                    offset = update["update_id"] + 1
-                    msg = (update.get("message") or {}).get("text", "").strip().lower()
-                    if msg.startswith("/approve"):
-                        self.send_message("✅ Trade approved — placing order.")
-                        return True
-                    if msg.startswith("/reject"):
-                        self.send_message("❌ Trade rejected.")
-                        return False
+            for update in (data or {}).get("result", []):
+                offset = update["update_id"] + 1
+                cb = (update.get("callback_query") or {}).get("data", "")
+                msg = (update.get("message") or {}).get("text", "").strip().lower()
+                if cb == "kill":
+                    Path(settings_kill_file()).touch()
+                    self.send_message("🚫 Kill switch activated.")
+                    return False
+                if cb == f"approve:{symbol}" or (not symbol and cb.startswith("approve")) or msg.startswith("/approve"):
+                    self.send_message("✅ Trade approved — placing order.")
+                    return True
+                if cb == f"reject:{symbol}" or (not symbol and cb.startswith("reject")) or msg.startswith("/reject"):
+                    self.send_message("❌ Trade rejected.")
+                    return False
             time.sleep(_POLL_INTERVAL_SECONDS)
 
         self.send_message("⏳ No reply within window — auto-rejecting (safe default).")
         return False
+
+
+def settings_kill_file() -> str:
+    from config.risk_limits import LIMITS
+    return LIMITS.kill_switch_file

@@ -119,6 +119,18 @@ class SimulatedTrade(SQLModel, table=True):
     learned_from: bool = False
 
 
+class APIUsageRecord(SQLModel, table=True):
+    """Per-call LLM token usage for monthly cost estimation."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_inr_estimate: float = 0.0
+    call_type: str = "REALTIME"  # REALTIME / BATCH / CACHED
+    agent_name: str = ""
+    created_at: datetime = Field(default_factory=_now)
+
+
 class RootCauseRecord(SQLModel, table=True):
     """Forensic record of why a trade lost. Feeds weekly distillation."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -273,6 +285,37 @@ class TradingJournal:
                 .order_by(DailyJournalEntry.date.desc())
             )
             return list(session.exec(stmt).all())
+
+    # ── API cost tracking ──────────────────────────────────────────────────────
+    def log_api_usage(self, *, model: str, input_tokens: int, output_tokens: int,
+                      call_type: str = "REALTIME", agent_name: str = "") -> None:
+        # Rough Haiku-tier pricing in INR (₹84/$): ~$0.80/M in, ~$4/M out.
+        # BATCH = 50% off; CACHED reads ~90% off the input portion.
+        in_rate, out_rate = 0.80, 4.0
+        if call_type == "BATCH":
+            in_rate, out_rate = in_rate * 0.5, out_rate * 0.5
+        elif call_type == "CACHED":
+            in_rate *= 0.3  # blended estimate for mostly-cached prompts
+        cost = ((input_tokens / 1_000_000) * in_rate
+                + (output_tokens / 1_000_000) * out_rate) * 84.0
+        with Session(self.engine) as session:
+            session.add(APIUsageRecord(
+                model=model, input_tokens=input_tokens, output_tokens=output_tokens,
+                cost_inr_estimate=round(cost, 4), call_type=call_type, agent_name=agent_name))
+            session.commit()
+
+    def get_monthly_cost(self) -> float:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        with Session(self.engine) as session:
+            rows = session.exec(select(APIUsageRecord)).all()
+        total = 0.0
+        for r in rows:
+            ts = r.created_at
+            if ts is not None and ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts is None or ts >= cutoff:
+                total += r.cost_inr_estimate or 0
+        return round(total, 2)
 
     # ── Forward simulation (24/7 paper learning) ───────────────────────────────
     def log_simulated_trade(self, **kwargs) -> SimulatedTrade:

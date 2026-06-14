@@ -60,6 +60,12 @@ class GrowwBroker(BrokerBase):
                 "Every trade MUST have a stop (CLAUDE.md rule 2)."
             )
 
+        # Guard against accidental duplicate orders within a 60s window.
+        from src.broker.order_deduplication import OrderDeduplicator
+        if OrderDeduplicator().is_duplicate(symbol, order_type.upper(), quantity, price):
+            console.print(f"[yellow][GROWW] Duplicate order suppressed for {symbol}.[/yellow]")
+            return {"status": "DUPLICATE_SUPPRESSED", "symbol": symbol, "broker_mode": "live"}
+
         try:
             # Entry order.
             entry = self._client.place_order(

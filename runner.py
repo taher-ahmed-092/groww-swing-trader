@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -50,8 +51,34 @@ _DISTILL_MARKER = os.path.join("data", "cache", "last_distill.txt")
 TZ = "Asia/Kolkata"
 
 
+_PAUSE_FILE = os.path.join("data", "cache", "trading_paused.txt")
+_LOCK_FILE = os.path.join("data", "cache", "runner.lock")
+
+
 def _kill_switch() -> bool:
     return Path(LIMITS.kill_switch_file).exists()
+
+
+def _is_paused() -> bool:
+    return Path(_PAUSE_FILE).exists()
+
+
+def _acquire_process_lock() -> bool:
+    """Prevent a second runner instance. Dependency-free PID liveness check."""
+    try:
+        if os.path.exists(_LOCK_FILE):
+            old = int(Path(_LOCK_FILE).read_text().strip() or "0")
+            if old and old != os.getpid():
+                try:
+                    os.kill(old, 0)  # raises if the PID is dead
+                    return False     # another live runner holds the lock
+                except OSError:
+                    pass             # stale lock — take it over
+        os.makedirs(os.path.dirname(_LOCK_FILE), exist_ok=True)
+        Path(_LOCK_FILE).write_text(str(os.getpid()))
+        return True
+    except OSError:
+        return True  # never block startup on lock IO errors
 
 
 def _run_weekly_distillation_once() -> None:
@@ -81,7 +108,7 @@ def _run_weekly_distillation_once() -> None:
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 def weekly_research_job() -> None:
-    if _kill_switch():
+    if _kill_switch() or _is_paused():
         return
     console.print("[cyan][JOB] weekly_research_job starting[/cyan]")
     notifier = TelegramNotifier()
@@ -120,10 +147,23 @@ def weekly_research_job() -> None:
 
 
 def daily_premarket_job() -> None:
-    if _kill_switch():
+    if _kill_switch() or _is_paused():
         return
     console.print("[cyan][JOB] daily_premarket_job starting[/cyan]")
     notifier = TelegramNotifier()
+
+    # Reliability: skip closed days; warn on an expired Groww token (live mode).
+    from src.data.market_calendar import NSECalendar
+
+    if not NSECalendar().is_market_open():
+        console.print("[yellow][JOB] market closed today — skipping[/yellow]")
+        return
+    if settings.live_trading_enabled:
+        from src.broker.token_manager import GrowwTokenManager
+
+        if not GrowwTokenManager().check_token_health().get("healthy"):
+            notifier.send_message("⚠️ Groww token unhealthy — skipping live premarket job.")
+            return
 
     if not os.path.exists(_CANDIDATES_FILE):
         console.print("[yellow][JOB] no weekly_candidates.json — skipping[/yellow]")
@@ -289,6 +329,32 @@ def weekly_model_retrain_job() -> None:
         console.print(f"[yellow][JOB] model not retrained: {result.get('message', '')}[/yellow]")
 
 
+def saturday_batch_job() -> None:
+    """Submit the weekly fundamental batch (Saturday 7 PM IST) — ~50% cheaper."""
+    if _kill_switch():
+        return
+    from src.batch.weekly_research_batch import WeeklyResearchBatch
+
+    candidates = ScoutAgent().scan()
+    batch_id = WeeklyResearchBatch().submit_weekly_batch(candidates)
+    if batch_id:
+        TelegramNotifier().send_message(f"📦 {len(candidates)} stocks queued for batch analysis.")
+
+
+def sunday_morning_batch_check() -> None:
+    """Retrieve weekly batch results (Sunday 7 AM IST)."""
+    if _kill_switch():
+        return
+    from src.batch.weekly_research_batch import WeeklyResearchBatch
+
+    results = WeeklyResearchBatch().check_and_retrieve_results()
+    notifier = TelegramNotifier()
+    if results:
+        notifier.send_message(f"✅ Batch ready: {len(results)} fundamentals cached for the week.")
+    else:
+        notifier.send_message("⏳ Weekly batch still processing (or none submitted).")
+
+
 def weekly_agent_evaluation_job() -> None:
     """Sunday 8:30 PM — measure agent accuracy + run the self-improvement enhancer."""
     if _kill_switch():
@@ -337,6 +403,9 @@ def weekly_agent_evaluation_job() -> None:
 
 # ── Main ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    if not _acquire_process_lock():
+        console.print("[bold red]Another runner instance is already running — exiting.[/bold red]")
+        sys.exit(1)
     console.print(f"[bold green]🚀 groww-swing-trader running | Mode: {settings.broker_mode}[/bold green]")
     console.print(
         "[green]Scheduler active. Jobs: weekly scan (Sun 7pm), daily check (Mon-Fri 9am), "
@@ -355,7 +424,19 @@ if __name__ == "__main__":
     scheduler.add_job(weekly_distillation_job, "cron", day_of_week="sun", hour=20, minute=0)
     scheduler.add_job(weekly_agent_evaluation_job, "cron", day_of_week="sun", hour=20, minute=30)
     scheduler.add_job(weekly_model_retrain_job, "cron", day_of_week="sun", hour=21, minute=0)
+    scheduler.add_job(saturday_batch_job, "cron", day_of_week="sat", hour=19, minute=0)
+    scheduler.add_job(sunday_morning_batch_check, "cron", day_of_week="sun", hour=7, minute=0)
     scheduler.start()
+
+    # Telegram command handler runs in a background thread (answers /commands).
+    if settings.telegram_bot_token:
+        import threading
+
+        from src.notifications.command_handler import CommandHandler
+
+        threading.Thread(target=CommandHandler().run_forever, daemon=True,
+                         name="telegram-commands").start()
+        console.print("[green]Telegram command handler started.[/green]")
 
     try:
         while True:

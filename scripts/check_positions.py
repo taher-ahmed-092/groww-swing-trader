@@ -37,6 +37,8 @@ def main() -> int:
     analyzer = RootCauseAnalyzer(journal)
     stops = TieredStopManager()
     tracker = SignalTracker()
+    from src.data.corporate_actions import CorporateActionChecker
+    corp_checker = CorporateActionChecker()
 
     with Session(journal.engine) as session:
         open_trades = list(session.exec(select(TradeRecord).where(TradeRecord.outcome == "OPEN")).all())
@@ -91,6 +93,20 @@ def main() -> int:
                 partial_exited=True if action["action"] == "PARTIAL_EXIT" else None,
             )
             console.print(f"  [cyan]{action['action']} — {action['reason']}[/cyan]")
+
+        # Corporate-action stop adjustment (bonus/split halve the price).
+        try:
+            for ca in corp_checker.get_upcoming_actions(trade.symbol):
+                subj = (ca.get("subject") or "").lower()
+                if "bonus" in subj or "split" in subj:
+                    new_stop = corp_checker.adjust_stop_for_corporate_action(
+                        trade.current_stop or trade.stop_price or price, ca)
+                    journal.update_position(trade.id, current_stop=new_stop)
+                    console.print(f"  [yellow]Corporate action ({ca.get('subject')}) "
+                                  f"— stop adjusted to ₹{new_stop}[/yellow]")
+                    break
+        except Exception:
+            pass
 
     # Recent closed-trade outcomes as a sparkline.
     recent_closed = [

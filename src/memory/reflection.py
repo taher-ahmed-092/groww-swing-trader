@@ -8,7 +8,7 @@ from __future__ import annotations
 from rich.console import Console
 
 from config.settings import settings
-from src.llm import get_llm
+from src.llm import cached_llm_call
 from src.memory.journal import TradeRecord, TradingJournal
 
 console = Console()
@@ -42,10 +42,7 @@ class PostTradeReflector:
         )
 
         try:
-            resp = get_llm(temperature=0).invoke(
-                [("system", _SYSTEM), ("human", prompt)]
-            )
-            reflection = (getattr(resp, "content", "") or "").strip()
+            reflection = cached_llm_call(_SYSTEM, prompt).strip()
         except Exception as exc:
             console.print(f"[yellow]Reflection LLM call failed: {exc}[/yellow]")
             reflection = f"Reflection unavailable ({exc})."

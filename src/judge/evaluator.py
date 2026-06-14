@@ -12,7 +12,7 @@ from rich.console import Console
 
 from config.settings import settings
 from src.data.market_context import MarketContext
-from src.llm import get_judge_llm, parse_json_response
+from src.llm import cached_llm_call, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
 from src.utils.adaptive import get_adaptive_params
@@ -178,8 +178,8 @@ class LLMJudge:
         )
 
         try:
-            resp = get_judge_llm(temperature=0).invoke([("system", system), ("human", prompt)])
-            verdict = parse_json_response(getattr(resp, "content", "") or "")
+            verdict = parse_json_response(
+                cached_llm_call(system, prompt, model=settings.llm_model_judge))
         except Exception as exc:
             console.print(f"[yellow]Judge LLM call failed: {exc}[/yellow]")
             verdict = {}
