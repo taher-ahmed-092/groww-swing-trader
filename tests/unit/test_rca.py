@@ -1,8 +1,19 @@
 """Root Cause Analysis behavior (heuristic path — no API key needed)."""
 from __future__ import annotations
 
+import pytest
+
+from config.settings import settings
 from src.memory.journal import KnowledgeEntry, TradeRecord, TradingJournal
 from src.memory.rca import RootCauseAnalyzer
+
+
+@pytest.fixture(autouse=True)
+def _force_heuristic_path(monkeypatch):
+    """These tests assert the deterministic heuristic pre-classification. Force the
+    no-LLM path so they stay deterministic even when an ANTHROPIC_API_KEY is present
+    in the environment (the LLM path returns model-decided categories)."""
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
 
 
 def _journal(tmp_path):

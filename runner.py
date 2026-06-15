@@ -439,6 +439,56 @@ def intraday_exit_job() -> None:
     console.print(f"[cyan][JOB] intraday_exit_job closed {n} sims[/cyan]")
 
 
+def _run_guarantee(label: str, target: int) -> None:
+    """Shared daily-guarantee runner. Takes the best available trade through the
+    FULL pipeline (judge + risk + stop) if below `target`; notifies on Telegram."""
+    if _kill_switch() or _is_paused():
+        return
+    from src.trading.daily_guarantee import DailyTradeGuarantee
+
+    taken = DailyTradeGuarantee().ensure_minimum_trades(target=target)
+    notifier = TelegramNotifier()
+    for t in taken:
+        if t.get("outcome") == "executed":
+            notifier.send_message(
+                f"📚 Learning trade placed: {t['symbol']} ({t['strategy']})\n"
+                "Paper trade for daily learning — full pipeline (judge + risk + stop)."
+            )
+        elif t.get("outcome") == "simulated":
+            notifier.send_message(
+                f"🔬 No setup cleared the judge today — logged {t['symbol']} "
+                f"({t['strategy']}) as a simulation so the system still learns."
+            )
+    console.print(f"[cyan][JOB] {label}: {len(taken)} guarantee action(s)[/cyan]")
+
+
+def midmorning_guarantee_job() -> None:
+    """Mon-Fri 10:30 AM — ensure at least 1 paper trade today (MIN)."""
+    _run_guarantee("midmorning_guarantee", target=1)
+
+
+def midday_guarantee_job() -> None:
+    """Mon-Fri 12:30 PM — top up toward the daily target (3)."""
+    _run_guarantee("midday_guarantee", target=3)
+
+
+def afternoon_guarantee_job() -> None:
+    """Mon-Fri 2:00 PM — last chance to guarantee a trade before 3 PM (MIN)."""
+    _run_guarantee("afternoon_guarantee", target=1)
+
+
+def hourly_health_job() -> None:
+    """Hourly heartbeat — verify the journal is readable; alert on failure only."""
+    if _kill_switch():
+        return
+    try:
+        TradingJournal().get_recent(n=1)
+        console.print("[dim][JOB] hourly_health_job ok[/dim]")
+    except Exception as exc:
+        TelegramNotifier().send_message(f"⚠️ System health check failed: {exc}")
+        console.print(f"[red][JOB] hourly_health_job DB error: {exc}[/red]")
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if not _acquire_process_lock():
@@ -468,6 +518,10 @@ if __name__ == "__main__":
     scheduler.add_job(sunday_morning_batch_check, "cron", day_of_week="sun", hour=7, minute=0)
     scheduler.add_job(intraday_entry_job, "cron", day_of_week="mon-fri", hour=9, minute=30)
     scheduler.add_job(intraday_exit_job, "cron", day_of_week="mon-fri", hour=15, minute=15)
+    scheduler.add_job(midmorning_guarantee_job, "cron", day_of_week="mon-fri", hour=10, minute=30)
+    scheduler.add_job(midday_guarantee_job, "cron", day_of_week="mon-fri", hour=12, minute=30)
+    scheduler.add_job(afternoon_guarantee_job, "cron", day_of_week="mon-fri", hour=14, minute=0)
+    scheduler.add_job(hourly_health_job, "cron", minute=0)
     scheduler.start()
 
     # Telegram connectivity check — sends a hello message if configured.

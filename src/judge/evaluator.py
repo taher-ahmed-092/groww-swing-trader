@@ -15,7 +15,7 @@ from src.data.market_context import MarketContext
 from src.llm import cached_llm_call, parse_json_response
 from src.memory.lessons import LessonsRetriever
 from src.orchestrator.state import TradeState
-from src.utils.adaptive import get_adaptive_params
+from src.trading.modes import get_current_mode
 
 console = Console()
 
@@ -51,6 +51,7 @@ class LLMJudge:
         nifty_trend = market_context.get("nifty_trend")
         weekly_trend = technical.get("weekly_trend") or indicators.get("weekly_trend")
 
+        mode = get_current_mode()
         if fundamental.get("hard_rejected"):
             flags.append("HARD_REJECTED_FUNDAMENTAL")
         if technical.get("proceed") is False and signal == "SKIP":
@@ -59,10 +60,13 @@ class LLMJudge:
             flags.append("POOR_RISK_REWARD")
         if adx_signal == "CHOPPY":
             flags.append("CHOPPY_MARKET")
-        if nifty_trend == "DOWNTREND" and signal == "BUY":
-            flags.append("FIGHTING_NIFTY")
-        if weekly_trend == "DOWNTREND" and signal == "BUY":
-            flags.append("WEEKLY_TREND_CONFLICT")
+        # Rogue mode intentionally trades downtrends — it lowers the bar but never
+        # bypasses the rest of the pipeline (stop-loss + judge scorecard still apply).
+        if not mode.trades_downtrends:
+            if nifty_trend == "DOWNTREND" and signal == "BUY":
+                flags.append("FIGHTING_NIFTY")
+            if weekly_trend == "DOWNTREND" and signal == "BUY":
+                flags.append("WEEKLY_TREND_CONFLICT")
 
         # Phase 4 — supertrend / money-flow / support auto-vetoes.
         cmf = indicators.get("cmf_20")
@@ -102,7 +106,9 @@ class LLMJudge:
                 "flags": veto,
             }
 
-        threshold = get_adaptive_params().get("judge_approval_threshold", APPROVAL_THRESHOLD)
+        # The trading mode is the explicit risk dial and takes precedence over the
+        # enhancer's adaptive tuning for the approval bar.
+        threshold = get_current_mode().judge_threshold
 
         if settings.effective_demo_mode:
             fund = fundamental.get("score", 0) or 0
@@ -112,7 +118,7 @@ class LLMJudge:
             if manually_requested:
                 flags.append("MANUALLY_REQUESTED")
             return {
-                "approved": overall >= 6.0,
+                "approved": overall >= threshold,
                 "score": round(overall / 10, 4),
                 "overall_score": overall,
                 "dimension_scores": {},

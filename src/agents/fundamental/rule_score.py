@@ -16,15 +16,24 @@ def _f(value):
 
 
 def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
-    """Score 0-10 (returned as 0-1) from ROCE, D/E, growth, promoter, P/E."""
+    """Score 0-10 (returned as 0-1) from ROCE, D/E, growth, promoter, P/E.
+
+    When NO dimension has usable data (the common case in demo mode without a
+    screener feed), return a neutral 0.50 with data_missing=True rather than 0.00 —
+    absent data is "unknown", not "bad", and a hard 0.00 would reject every paper
+    trade. Genuinely-weak-but-present data still scores low (CLAUDE.md rule 4: we
+    never invent numbers to flatter a stock).
+    """
     data = {**(ratios or {}), **(screener_data or {})}
     points = 0.0
+    dims_with_data = 0
     strengths: list[str] = []
     weaknesses: list[str] = []
 
     # ROCE (0-3).
     roce = _f(data.get("roce_pct"))
     if roce is not None:
+        dims_with_data += 1
         if roce >= 20:
             points += 3
             strengths.append(f"Excellent ROCE {roce}%")
@@ -39,6 +48,7 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     # Debt/Equity (0-2).
     dte = _f(data.get("debt_to_equity"))
     if dte is not None:
+        dims_with_data += 1
         if dte < 0.5:
             points += 2
             strengths.append(f"Low debt (D/E {dte})")
@@ -51,6 +61,7 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     sales = _f(data.get("sales_growth_3yr"))
     profit = _f(data.get("profit_growth_3yr"))
     if sales is not None and profit is not None:
+        dims_with_data += 1
         if sales > 10 and profit > 10:
             points += 2
             strengths.append("Improving 3yr sales & profit growth")
@@ -62,6 +73,8 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     # Promoter holding + pledging (0-2).
     holding = _f(data.get("promoter_holding_pct"))
     pledged = _f(data.get("promoter_pledged_pct"))
+    if holding is not None or pledged is not None:
+        dims_with_data += 1
     promoter_pts = 0
     if holding is not None and holding >= 50:
         promoter_pts += 1
@@ -74,14 +87,17 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
 
     # P/E reasonableness (0-1).
     pe = _f(data.get("pe_ratio"))
-    if pe is not None and 0 < pe <= 35:
-        points += 1
-    elif pe is not None and pe > 60:
-        weaknesses.append(f"Expensive P/E {pe}")
+    if pe is not None:
+        dims_with_data += 1
+        if 0 < pe <= 35:
+            points += 1
+        elif pe > 60:
+            weaknesses.append(f"Expensive P/E {pe}")
 
     # Piotroski F-Score (research-backed financial health).
     pscore = data.get("piotroski_score")
     if pscore is not None:
+        dims_with_data += 1
         if pscore >= 7:
             points += 2
             strengths.append(f"Strong Piotroski (F={pscore})")
@@ -94,6 +110,7 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     # FCF yield (Buffett's valuation read).
     fcf_yield = _f(data.get("fcf_yield"))
     if fcf_yield is not None:
+        dims_with_data += 1
         if fcf_yield > 0.08:
             points += 1.5
             strengths.append(f"High FCF yield ({fcf_yield:.1%})")
@@ -105,6 +122,12 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     # Normalize to 0-1 (clamp — extra signals can push points past 10).
     score = round(max(0.0, min(1.0, points / 10.0)), 4)
 
+    # No usable data at all → neutral/unknown, not a hard 0.00 rejection.
+    data_missing = dims_with_data == 0
+    if data_missing:
+        score = 0.50
+        weaknesses.append("No fundamental data available — scored neutral")
+
     if score >= 0.7:
         moat_strength = "STRONG"
     elif score >= 0.5:
@@ -114,15 +137,23 @@ def rule_based_fundamental_score(ratios: dict, screener_data: dict) -> dict:
     else:
         moat_strength = "NONE"
 
+    reasoning = (
+        "No fundamental data — neutral 0.50 (demo mode)."
+        if data_missing
+        else f"Rule-based fundamental score {points:.1f}/10 (demo mode)."
+    )
+
     return {
         "score": score,
-        "proceed": score >= 0.55,
+        # Neutral/unknown should proceed to the judge rather than be rejected here.
+        "proceed": score >= 0.55 or data_missing,
         "hard_rejected": False,
-        "reasoning": f"Rule-based fundamental score {points:.1f}/10 (demo mode).",
+        "reasoning": reasoning,
         "strengths": strengths,
         "weaknesses": weaknesses,
         "moat_strength": moat_strength,
         "swot": {"strengths": strengths, "weaknesses": weaknesses,
                  "opportunities": [], "threats": []},
         "demo_mode": True,
+        "data_missing": data_missing,
     }

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = Field(default=False)
     paper_demo_mode: bool = Field(default=False)
 
+    # Trading mode — the system's risk dial. conserve | balanced | rogue.
+    # Overridable at runtime via the /conserve /balanced /rogue Telegram commands.
+    trading_mode: str = Field(default="balanced")
+
     # Overrideable defaults (fall back to risk_limits.py if not set)
     max_trade_value_inr: float = Field(default=500.0)
     min_confidence: float = Field(default=0.80)

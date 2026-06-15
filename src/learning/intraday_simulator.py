@@ -45,6 +45,24 @@ class IntradaySimulator:
     def __init__(self) -> None:
         self.fetcher = MarketDataFetcher()
 
+    def _get_simulation_candidates(self) -> list[str]:
+        """Today's candidates from the expanded watchlist — a randomized mix of
+        large/mid/small caps so the system sees different stocks each day. Falls back
+        to the fixed large-cap list if the watchlist can't be loaded."""
+        try:
+            import random
+
+            from src.data.watchlist import ALL_STOCKS
+
+            large = [s for s, d in ALL_STOCKS.items() if d["tier"] == "large"]
+            mid = [s for s, d in ALL_STOCKS.items() if d["tier"] == "mid"]
+            small = [s for s, d in ALL_STOCKS.items() if d["tier"] == "small"]
+            return (random.sample(large, min(3, len(large)))
+                    + random.sample(mid, min(3, len(mid)))
+                    + random.sample(small, min(2, len(small))))
+        except Exception:
+            return list(self.STOCKS_TO_SIMULATE)
+
     # ── morning: open positions ─────────────────────────────────────────────────
     def run_morning_entries(self) -> list[dict]:
         """9:30 AM: open 3-5 intraday simulated positions on real data."""
@@ -58,7 +76,7 @@ class IntradaySimulator:
             regime = {"regime": "UNKNOWN"}
         regime_name = regime.get("regime", "UNKNOWN")
 
-        for symbol in self.STOCKS_TO_SIMULATE:
+        for symbol in self._get_simulation_candidates():
             if len(positions) >= 5:
                 break
 

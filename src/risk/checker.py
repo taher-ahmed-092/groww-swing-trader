@@ -14,9 +14,11 @@ from rich.console import Console
 
 from config.risk_limits import LIMITS
 from config.settings import settings
+from src.data.watchlist import ALL_STOCKS, get_risk_params_for_tier
 from src.memory.journal import TradingJournal
 from src.orchestrator.state import TradeState
 from src.risk.position_sizer import PositionSizer
+from src.trading.modes import get_current_mode
 
 console = Console()
 
@@ -48,6 +50,12 @@ class RiskChecker:
         fundamental = state.get("fundamental_verdict", {})
         judge = state.get("judge_verdict", {})
 
+        # Market-cap tier governs position sizing (smaller = smaller positions).
+        symbol = state.get("symbol", "")
+        tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+        tier_params = get_risk_params_for_tier(tier)
+        mode = get_current_mode()  # conserve | balanced | rogue — the risk dial
+
         # 1. Kill switch.
         if os.path.exists(LIMITS.kill_switch_file):
             return self._reject(["KILL_SWITCH file present — all execution halted."])
@@ -62,10 +70,16 @@ class RiskChecker:
         tech_score = technical.get("score", 0) or 0
         fund_score = fundamental.get("score", 0) or 0
         demo_tag = " (demo)" if demo else ""
+        # Missing fundamental data shouldn't penalize a name in demo/learning mode —
+        # use a relaxed floor (0.45) rather than rejecting for absent screener data.
+        fund_min = min_conf
+        if demo and fundamental.get("data_missing"):
+            fund_min = 0.45
+            demo_tag = " (demo, data-missing)"
         if tech_score < min_conf:
             reasons.append(f"technical score {tech_score:.2f} < min {min_conf:.2f}{demo_tag}")
-        if fund_score < min_conf:
-            reasons.append(f"fundamental score {fund_score:.2f} < min {min_conf:.2f}{demo_tag}")
+        if fund_score < fund_min:
+            reasons.append(f"fundamental score {fund_score:.2f} < min {fund_min:.2f}{demo_tag}")
 
         # 3. Stop must exist — no exceptions.
         stop_price = technical.get("stop_price")
@@ -75,7 +89,7 @@ class RiskChecker:
         # 4. Judge pass. DEMO_MODE is not a real veto flag — in demo, an overall
         # score >= 6.0 counts as approved even if the verdict dict didn't set it.
         judge_approved = judge.get("approved", False)
-        if not judge_approved and demo and (judge.get("overall_score", 0) or 0) >= 6.0:
+        if not judge_approved and demo and (judge.get("overall_score", 0) or 0) >= mode.judge_threshold:
             judge_approved = True
         if LIMITS.require_judge_pass and not judge_approved:
             reasons.append("judge did not approve the trade.")
@@ -135,6 +149,26 @@ class RiskChecker:
             sizing["sizing_explanation"] = (
                 sizing.get("sizing_explanation", "") + f" | circuit-breaker ×{cb_factor}")
 
+        # Tier-based sizing: mid/small caps take smaller positions (more volatile).
+        tier_mult = tier_params["position_size_multiplier"]
+        if tier_mult < 1.0 and entry_price:
+            position_size_inr = round(position_size_inr * tier_mult, 2)
+            quantity = max(1, int(position_size_inr / entry_price))
+            sizing["position_size_inr"] = position_size_inr
+            sizing["quantity"] = quantity
+            sizing["sizing_explanation"] = (
+                sizing.get("sizing_explanation", "") + f" | tier {tier} ×{tier_mult}")
+
+        # Trading-mode sizing (conserve halves position size; rogue/balanced keep full).
+        mode_mult = mode.position_size_multiplier
+        if mode_mult < 1.0 and entry_price:
+            position_size_inr = round(position_size_inr * mode_mult, 2)
+            quantity = max(1, int(position_size_inr / entry_price))
+            sizing["position_size_inr"] = position_size_inr
+            sizing["quantity"] = quantity
+            sizing["sizing_explanation"] = (
+                sizing.get("sizing_explanation", "") + f" | mode {mode.name} ×{mode_mult}")
+
         if quantity < 1:
             reasons.append("dynamic sizing produced < 1 share — entry price too high for capital.")
             return self._reject(reasons)
@@ -155,6 +189,9 @@ class RiskChecker:
             "position_size_inr": position_size_inr,
             "quantity": quantity,
             "risk_inr": risk_inr,
+            "tier": tier,
+            "tier_size_multiplier": tier_mult,
+            "trading_mode": mode.name,
             "kelly_fraction": sizing["kelly_fraction"],
             "win_rate_used": sizing["win_rate_used"],
             "confidence_multiplier": sizing["confidence_multiplier"],

@@ -45,7 +45,8 @@ class CommandHandler:
             "/reset_kill": self._reset_kill, "/health": self._health,
             "/chart": self._chart, "/win_chart": self._win_chart,
             "/dashboard_link": self._dashboard_link, "/strategies": self._strategies,
-            "/pairs": self._pairs,
+            "/pairs": self._pairs, "/mode": self._mode, "/conserve": self._conserve,
+            "/balanced": self._balanced, "/rogue": self._rogue,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -452,6 +453,41 @@ class CommandHandler:
         self._send("🧠 *Strategy performance*\n" + "\n".join(
             f"{n}: {('%.0f%%' % (d['win_rate'] * 100)) if d.get('win_rate') is not None else '—'} "
             f"({d['trades']})" for n, d in bd.items()))
+
+    def _mode(self, args):
+        """show/set trading mode"""
+        from src.trading.modes import MODES, get_current_mode, set_mode
+
+        if args and args[0].lower() in MODES:
+            cfg = set_mode(args[0].lower())
+            self._send(f"{cfg.emoji} Trading mode set to *{cfg.name}*\n{cfg.description}")
+            return
+        cur = get_current_mode()
+        lines = [f"{cur.emoji} *Current mode: {cur.name}*", cur.description, "",
+                 "Switch with /conserve, /balanced, /rogue:"]
+        for c in MODES.values():
+            mark = "→ " if c.name == cur.name else "   "
+            lines.append(f"{mark}{c.emoji} {c.name}: judge {c.judge_threshold}/10, "
+                         f"{c.max_trades_per_week} trades/wk, size ×{c.position_size_multiplier}")
+        self._send("\n".join(lines))
+
+    def _set_mode_cmd(self, mode: str):
+        from src.trading.modes import set_mode
+
+        cfg = set_mode(mode)
+        self._send(f"{cfg.emoji} Trading mode set to *{cfg.name}*\n{cfg.description}")
+
+    def _conserve(self, args):
+        """protect capital — high bar, half size"""
+        self._set_mode_cmd("conserve")
+
+    def _balanced(self, args):
+        """default — moderate bar, full size"""
+        self._set_mode_cmd("balanced")
+
+    def _rogue(self, args):
+        """eager — low bar, trades downtrends"""
+        self._set_mode_cmd("rogue")
 
     def _pairs(self, args):
         """pairs opportunities"""

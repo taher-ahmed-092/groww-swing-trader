@@ -1,12 +1,14 @@
 """
 Scout agent — weekly candidate discovery.
 
-Screens a sectored watchlist of ~50 Nifty / Nifty Next 50 names. ALL scoring is
-deterministic code over real data (CLAUDE.md rule 4) — the LLM is never involved in
-producing numbers. Each stock is scored across seven dimensions (momentum, trend,
-volume, 1m relative strength, 52W position, institutional FII/DII flow, 20d relative
-strength), adjusted by standing knowledge patterns, then filtered for earnings
-proximity. Top 5 returned.
+Screens the expanded 200+ stock watchlist (src/data/watchlist.py) across all market
+caps. ALL scoring is deterministic code over real data (CLAUDE.md rule 4) — the LLM
+is never involved in producing numbers. Each stock passes a tier-scaled liquidity
+gate, then is scored across seven dimensions (momentum, trend, volume, 1m relative
+strength, 52W position, institutional FII/DII flow, 20d relative strength), adjusted
+by tier (mid/small need stronger volume; small needs a breakout or deep-oversold
+signal) and standing knowledge patterns, then filtered for earnings proximity.
+Top 10 returned.
 
 TODO: Add real-time news screening via SerpAPI or similar in a future iteration.
 """
@@ -24,6 +26,7 @@ from rich.console import Console
 
 from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
+from src.data.watchlist import ALL_STOCKS, get_risk_params_for_tier, get_tier
 from src.memory.journal import TradingJournal
 from src.memory.lessons import LessonsRetriever
 from src.utils.adaptive import get_adaptive_params
@@ -37,67 +40,15 @@ _NSE_HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nseindia.co
 _NEG_CUES = ("fail", "loss", "weak", "headwind", "deteriorat", "negative", "overbought")
 _POS_CUES = ("outperform", "win", "strong", "positive", "breakout", "momentum")
 
-# ~50 Nifty / Nifty Next 50 names, ~6 per sector. {symbol: {name, sector}}
+# Watchlist now lives in src/data/watchlist.py (200+ stocks across all market caps).
+# WATCHLIST is kept as a backward-compatible {symbol: {name, sector}} view so existing
+# callers (e.g. command_handler /watchlist) keep working. Tier lookups use ALL_STOCKS.
 WATCHLIST: dict[str, dict[str, str]] = {
-    # Banking
-    "HDFCBANK": {"name": "HDFC Bank", "sector": "Banking"},
-    "ICICIBANK": {"name": "ICICI Bank", "sector": "Banking"},
-    "SBIN": {"name": "State Bank of India", "sector": "Banking"},
-    "KOTAKBANK": {"name": "Kotak Mahindra Bank", "sector": "Banking"},
-    "AXISBANK": {"name": "Axis Bank", "sector": "Banking"},
-    "INDUSINDBK": {"name": "IndusInd Bank", "sector": "Banking"},
-    # IT
-    "TCS": {"name": "Tata Consultancy Services", "sector": "IT"},
-    "INFY": {"name": "Infosys", "sector": "IT"},
-    "WIPRO": {"name": "Wipro", "sector": "IT"},
-    "HCLTECH": {"name": "HCL Technologies", "sector": "IT"},
-    "TECHM": {"name": "Tech Mahindra", "sector": "IT"},
-    # LTIM / LTIMINDTREE both 404 in yfinance (verified) — use Persistent Systems.
-    "PERSISTENT": {"name": "Persistent Systems", "sector": "IT"},
-    # FMCG
-    "HINDUNILVR": {"name": "Hindustan Unilever", "sector": "FMCG"},
-    "ITC": {"name": "ITC", "sector": "FMCG"},
-    "NESTLEIND": {"name": "Nestle India", "sector": "FMCG"},
-    "BRITANNIA": {"name": "Britannia Industries", "sector": "FMCG"},
-    "DABUR": {"name": "Dabur India", "sector": "FMCG"},
-    "TATACONSUM": {"name": "Tata Consumer Products", "sector": "FMCG"},
-    # Auto
-    "MARUTI": {"name": "Maruti Suzuki", "sector": "Auto"},
-    # TATAMOTORS returns no yfinance data post-demerger (verified) — use TVS Motor.
-    "TVSMOTOR": {"name": "TVS Motor", "sector": "Auto"},
-    "M&M": {"name": "Mahindra & Mahindra", "sector": "Auto"},
-    "BAJAJ-AUTO": {"name": "Bajaj Auto", "sector": "Auto"},
-    "EICHERMOT": {"name": "Eicher Motors", "sector": "Auto"},
-    "HEROMOTOCO": {"name": "Hero MotoCorp", "sector": "Auto"},
-    # Pharma
-    "SUNPHARMA": {"name": "Sun Pharmaceutical", "sector": "Pharma"},
-    "DRREDDY": {"name": "Dr Reddy's Labs", "sector": "Pharma"},
-    "CIPLA": {"name": "Cipla", "sector": "Pharma"},
-    "DIVISLAB": {"name": "Divi's Laboratories", "sector": "Pharma"},
-    "APOLLOHOSP": {"name": "Apollo Hospitals", "sector": "Pharma"},
-    "AUROPHARMA": {"name": "Aurobindo Pharma", "sector": "Pharma"},
-    # Energy
-    "RELIANCE": {"name": "Reliance Industries", "sector": "Energy"},
-    "ONGC": {"name": "Oil & Natural Gas Corp", "sector": "Energy"},
-    "NTPC": {"name": "NTPC", "sector": "Energy"},
-    "POWERGRID": {"name": "Power Grid Corp", "sector": "Energy"},
-    "COALINDIA": {"name": "Coal India", "sector": "Energy"},
-    "BPCL": {"name": "Bharat Petroleum", "sector": "Energy"},
-    # Metals
-    "TATASTEEL": {"name": "Tata Steel", "sector": "Metals"},
-    "JSWSTEEL": {"name": "JSW Steel", "sector": "Metals"},
-    "HINDALCO": {"name": "Hindalco Industries", "sector": "Metals"},
-    "VEDL": {"name": "Vedanta", "sector": "Metals"},
-    "JINDALSTEL": {"name": "Jindal Steel & Power", "sector": "Metals"},
-    "NMDC": {"name": "NMDC", "sector": "Metals"},
-    # Infra
-    "LT": {"name": "Larsen & Toubro", "sector": "Infra"},
-    "ADANIPORTS": {"name": "Adani Ports & SEZ", "sector": "Infra"},
-    "ULTRACEMCO": {"name": "UltraTech Cement", "sector": "Infra"},
-    "GRASIM": {"name": "Grasim Industries", "sector": "Infra"},
-    "SHREECEM": {"name": "Shree Cement", "sector": "Infra"},
-    "DLF": {"name": "DLF", "sector": "Infra"},
+    sym: {"name": sym, "sector": d["sector"]} for sym, d in ALL_STOCKS.items()
 }
+
+# Minimum 20-day average daily volume per tier — below this we can't exit cleanly.
+_MIN_VOLUME_BY_TIER = {"large": 100_000, "mid": 50_000, "small": 20_000}
 
 
 class ScoutAgent:
@@ -198,6 +149,17 @@ class ScoutAgent:
             return None
 
     @staticmethod
+    def _passes_liquidity_check(df, tier: str) -> bool:
+        """Reject illiquid names — if we can't exit, we're trapped."""
+        if df is None or len(df) < 20:
+            return False
+        try:
+            avg_volume = float(df["Volume"].tail(20).mean())
+        except Exception:
+            return False
+        return avg_volume >= _MIN_VOLUME_BY_TIER.get(tier, 20_000)
+
+    @staticmethod
     def _pattern_polarity(description: str) -> str:
         desc = (description or "").lower()
         if any(c in desc for c in _NEG_CUES):
@@ -214,12 +176,19 @@ class ScoutAgent:
         if df is None or df.empty:
             return None
 
+        tier = get_tier(symbol)
+        tier_params = get_risk_params_for_tier(tier)
+        # Liquidity gate — skip names we can't reliably exit (tier-scaled).
+        if not self._passes_liquidity_check(df, tier):
+            return None
+
         ind = compute_indicators(df)
         meta = WATCHLIST.get(symbol, {"name": symbol, "sector": "Unknown"})
         price = float(df["Close"].iloc[-1])
         year_high = float(df["High"].max())
         year_low = float(df["Low"].min())
         vr = ind["volume_ratio"]
+        tier_min_vr = tier_params["min_volume_ratio"]
 
         rsi_low = params.get("scout_rsi_low", 50)
         rsi_high = params.get("scout_rsi_high", 65)
@@ -268,14 +237,17 @@ class ScoutAgent:
             reasons.append("near 52W low (falling knife)")
             flags.append("NEAR_52W_LOW")
 
-        # 3. Volume (0-2).
-        if vr is not None:
+        # 3. Volume (0-2) — mid/small tiers need stronger volume confirmation
+        #    (tier_min_vr: large 1.0, mid 1.2, small 1.5).
+        if vr is not None and vr >= tier_min_vr:
             if vr > 2.0:
                 score += 2
                 reasons.append(f"volume {vr}x (strong)")
             elif vr >= 1.5:
                 score += 1
                 reasons.append(f"volume {vr}x")
+        elif vr is not None:
+            flags.append(f"thin_volume_{tier}")
 
         # 4. Relative strength 1m (0-1).
         if len(df) >= 21 and nifty_1m is not None:
@@ -309,10 +281,19 @@ class ScoutAgent:
                 score += 1
                 reasons.append(f"20d RS strong ({stock_20d:.1f}% vs Nifty {nifty_20d:.1f}%)")
 
+        # Small-caps need a strong signal (breakout OR deep-oversold bounce) to rank —
+        # their volatility punishes marginal setups.
+        if tier == "small":
+            strong = ("BREAKOUT" in flags) or (rsi is not None and rsi < 35)
+            if not strong:
+                score -= 2
+                flags.append("SMALLCAP_WEAK_SIGNAL")
+
         return {
             "symbol": symbol,
             "name": meta["name"],
             "sector": meta["sector"],
+            "tier": tier,
             "score": score,
             "rationale": "; ".join(reasons) if reasons else "no strong signals",
             "flags": flags,
@@ -381,7 +362,7 @@ class ScoutAgent:
                 candidate["rationale"] += " | watch past failures: " + "; ".join(failure_patterns)
 
         scored.sort(key=lambda c: c["score"], reverse=True)
-        top = scored[:5]
+        top = scored[:10]
         if top:
             summary = ", ".join("{0}({1})".format(c["symbol"], c["score"]) for c in top)
             console.print(f"[cyan][SCOUT] Top candidates: {summary}[/cyan]")
