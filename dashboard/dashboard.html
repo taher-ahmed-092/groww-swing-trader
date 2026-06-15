@@ -111,6 +111,7 @@
     <span id="market-dot" class="market-dot"></span>
     <span id="market-text">NSE</span>
     <span id="market-countdown"></span>
+    <span id="nifty-price" class="mono" style="color:var(--accent);margin-left:6px"></span>
   </div>
   <div id="live-clock" class="mono">—</div>
   <div id="conn">● connecting…</div>
@@ -284,8 +285,10 @@ let _prevPosCount=0;
 function updatePositions(positions){
   const c=document.getElementById('positions');
   if(!positions||!positions.length){
-    c.innerHTML='<div class="radar"></div><div class="muted" style="text-align:center">😴 Scanning for opportunities…</div>';
-    _prevPosCount=0;return;}
+    c.innerHTML='<div class="radar"></div><div class="muted" style="text-align:center">'
+      +'😴 No open positions yet — the system is learning.<br>'
+      +'Intraday simulations run 9:30 AM → 3:15 PM IST every market day.</div>';
+    _prevPosCount=0;updateTicker([]);return;}
   const isNew=positions.length>_prevPosCount;
   c.innerHTML=positions.map((p,i)=>{
     const span=(p.target-p.entry)||1,prog=Math.max(0,Math.min(100,(p.current-p.entry)/span*100));
@@ -329,7 +332,8 @@ function updateWL(wl){
 
 function updateKnowledge(kb){
   const c=document.getElementById('knowledge');
-  if(!kb||!kb.length){c.innerHTML='<div class="muted">Knowledge base empty — learning begins after first trades.</div>';return;}
+  if(!kb||!kb.length){c.innerHTML='<div class="muted">⏳ Waiting for the first scan — patterns appear as the system learns.<br>'
+    +'Run <code>/scan</code> or <code>/pairs</code> in Telegram, or wait for the 9:30 AM intraday sims.</div>';return;}
   c.innerHTML=kb.map((e,i)=>`<div class="kb" style="animation-delay:${i*50}ms">
     <div><span class="badge">${e.category}</span> ${e.description}</div>
     <div class="cb"><span style="width:${e.confidence*100}%"></span></div>
@@ -475,6 +479,8 @@ function updateDashboard(d){
   document.getElementById('mode').textContent=d.mode||'—';
   document.getElementById('owner').textContent=d.owner||'Trader';
   document.getElementById('api-status').textContent=d.api_active?'✅':'🧪';
+  if(d.nifty_price!=null)document.getElementById('nifty-price').textContent=
+    `NIFTY ₹${Number(d.nifty_price).toLocaleString('en-IN',{maximumFractionDigits:0})} · RSI ${(d.nifty_rsi||0).toFixed(0)}`;
   const s=d.summary;
   animateCounter(document.getElementById('total-trades'),s.total_trades,400);
   animateCounter(document.getElementById('win-rate-num'),s.win_rate,600,'','%');
@@ -487,8 +493,11 @@ function updateDashboard(d){
   updatePositions(d.positions);updatePnlChart(d.pnl_history||[]);updateWL(d.wl_chart);
   updateKnowledge(d.knowledge);updateRegime(d.regime);updateStrategies(d.strategy_breakdown);
   updateSimInsights(d.sim_insights);renderConstellation(d.knowledge);updateLearningPanel(d);
+  const nextJob=(d.next_jobs&&d.next_jobs[0])?`Next: ${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'No more jobs today';
   document.getElementById('sysstatus').textContent=
-    `Mode ${d.mode} · Broker ${d.broker} · KB ${(d.knowledge||[]).length} shown · Updated ${(d.timestamp||'').slice(11,19)} IST`;
+    `Mode ${d.mode} · Broker ${d.broker} · ${d.market_open?'🟢 NSE open':'🔴 NSE closed'} · `+
+    `Uptime ${d.system_uptime||'—'} · ${nextJob} · KB ${(d.knowledge||[]).length} shown · `+
+    `Updated ${(d.timestamp||'').slice(11,19)} IST`;
   wisdomItems=buildWisdom(d);
   document.getElementById('killswitch-banner').style.display=d.kill_switch?'block':'none';
 }

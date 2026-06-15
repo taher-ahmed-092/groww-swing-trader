@@ -484,7 +484,7 @@ if __name__ == "__main__":
 
         from src.notifications.command_handler import CommandHandler
 
-        threading.Thread(target=CommandHandler().run_forever, daemon=True,
+        threading.Thread(target=CommandHandler().start, daemon=True,
                          name="telegram-commands").start()
         console.print("[green]Telegram command handler started.[/green]")
 

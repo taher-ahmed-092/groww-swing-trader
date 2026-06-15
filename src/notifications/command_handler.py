@@ -61,6 +61,19 @@ class CommandHandler:
         except requests.RequestException:
             pass
 
+    def start(self) -> None:
+        """Entry point from runner.py. Wraps run_forever so a crash self-heals
+        instead of killing the thread — the bot stays responsive across failures."""
+        if not self.tg.is_configured():
+            log.debug("Command handler not started — no Telegram credentials.")
+            return
+        while True:
+            try:
+                self.run_forever()
+            except Exception as exc:  # noqa: BLE001 - never let the thread die
+                log.error("Command handler crashed: %s — restarting in 10s", exc)
+            time.sleep(10)
+
     def run_forever(self) -> None:
         if not self.tg.is_configured():
             log.debug("Command handler not started — no Telegram credentials.")
@@ -69,12 +82,13 @@ class CommandHandler:
         offset = None
         while True:
             try:
-                params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
+                # Short long-poll so commands (e.g. /start) feel instant.
+                params = {"timeout": 5, "allowed_updates": ["message", "callback_query"]}
                 if offset is not None:
                     params["offset"] = offset
                 r = requests.get(
                     _API.format(token=settings.telegram_bot_token, method="getUpdates"),
-                    params=params, timeout=35)
+                    params=params, timeout=10)
                 for update in r.json().get("result", []):
                     offset = update["update_id"] + 1
                     self._dispatch(update)
@@ -123,6 +137,8 @@ class CommandHandler:
         """welcome + command list"""
         from src.utils.tips import get_random_tip
 
+        # Instant acknowledgment so the bot feels responsive, then the full card.
+        self._send("🌌 Loading your trading system…")
         self._send(
             "🌌 *Welcome to Cosmic Punk Trading System*\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"

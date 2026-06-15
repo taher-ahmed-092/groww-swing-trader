@@ -53,7 +53,11 @@ def main() -> int:
 
     # 1. Dashboard server
     console.print("[cyan]1/3 Starting dashboard server…[/]")
-    processes.append(subprocess.Popen([sys.executable, "scripts/run_dashboard.py"], cwd=_REPO_ROOT))
+    try:
+        processes.append(subprocess.Popen(
+            [sys.executable, "scripts/run_dashboard.py"], cwd=_REPO_ROOT))
+    except Exception as exc:
+        console.print(f"[yellow]Dashboard failed to start: {exc} — continuing.[/]")
     time.sleep(3)
 
     # 2. Cloudflare tunnel (optional)
@@ -79,28 +83,54 @@ def main() -> int:
 
     # 3. Scheduler + Telegram bot
     console.print("[cyan]3/3 Starting scheduler + Telegram bot…[/]")
-    processes.append(subprocess.Popen([sys.executable, "runner.py"], cwd=_REPO_ROOT))
-    time.sleep(2)
+    try:
+        processes.append(subprocess.Popen([sys.executable, "runner.py"], cwd=_REPO_ROOT))
+    except Exception as exc:
+        console.print(f"[yellow]Runner failed to start: {exc} — continuing.[/]")
+    time.sleep(5)  # let the runner come up before announcing
 
     token = settings.dashboard_secret_token
     local_url = f"http://localhost:{settings.dashboard_port}/dashboard/{token}"
+    full_url = f"{tunnel_url}/dashboard/{token}" if (tunnel_url and token) else None
 
-    if tunnel_url and token:
-        full_url = f"{tunnel_url}/dashboard/{token}"
-        url_file = Path("data/cache/current_dashboard_url.txt")
-        url_file.parent.mkdir(parents=True, exist_ok=True)
-        url_file.write_text(full_url)
+    if full_url:
         try:
-            from src.notifications.telegram_bot import TelegramNotifier
+            url_file = Path("data/cache/current_dashboard_url.txt")
+            url_file.parent.mkdir(parents=True, exist_ok=True)
+            url_file.write_text(full_url)
+        except OSError:
+            pass
 
-            notifier = TelegramNotifier()
-            if notifier.is_configured():
-                notifier.send_message(
-                    "🚀 *Cosmic Punk is Live!*\n\n"
-                    f"📊 Dashboard:\n`{full_url}`\n\n"
-                    "_Tap the link to open on your phone._")
-        except Exception as exc:
-            console.print(f"[yellow]Telegram send failed: {exc}[/]")
+    # Comprehensive startup message to Telegram (best-effort — never crashes startup).
+    try:
+        from src.data.regime_detector import RegimeDetector
+        from src.notifications.telegram_bot import TelegramNotifier
+        from src.utils.tips import get_random_tip
+
+        try:
+            regime = RegimeDetector().detect()
+        except Exception:
+            regime = {"regime": "UNKNOWN", "rsi": 0}
+        dash_line = (f"📱 Dashboard: {full_url}" if full_url
+                     else "📱 Dashboard: local only (start cloudflared separately)")
+        notifier = TelegramNotifier()
+        if notifier.is_configured():
+            notifier.send_message(
+                "🌌 *Cosmic Punk Trading System — ONLINE*\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Mode: {settings.mode_label}\n"
+                f"Regime: {regime.get('regime', 'UNKNOWN')} | "
+                f"RSI: {(regime.get('rsi') or 0):.0f}\n\n"
+                f"{dash_line}\n\n"
+                "Type /start to see all commands\n"
+                "Type /scan to scan stocks now\n"
+                "Type /pairs for market-neutral opportunities\n\n"
+                f"💡 _{get_random_tip()}_"
+            )
+    except Exception as exc:
+        console.print(f"[yellow]Telegram startup message failed: {exc}[/]")
+
+    if full_url:
         console.print(Panel(
             "[bold green]✅ EVERYTHING IS RUNNING[/]\n\n"
             f"[bold]Laptop:[/]  {local_url}\n"

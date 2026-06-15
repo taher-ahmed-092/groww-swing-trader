@@ -27,6 +27,46 @@ from src.learning.forward_simulator import ForwardSimulator
 from src.memory.journal import TradingJournal
 
 IST = ZoneInfo("Asia/Kolkata")
+_START_TIME = datetime.now(IST)  # for system_uptime
+
+# Static daily schedule (IST) — surfaced so the dashboard is useful before any trade.
+_DAILY_JOBS = [
+    (9 * 60 + 0, "Morning brief + premarket scan"),
+    (9 * 60 + 30, "Intraday simulations open"),
+    (15 * 60 + 15, "Intraday simulations close + learn"),
+    (16 * 60 + 0, "Postmarket — close hit stops/targets"),
+    (16 * 60 + 30, "Daily learning synthesis"),
+]
+
+
+def _market_open(now: datetime) -> bool:
+    """NSE open right now = a trading day and within 09:15–15:30 IST."""
+    try:
+        from src.data.market_calendar import NSECalendar
+
+        if not NSECalendar().is_market_open(now.date()):
+            return False
+    except Exception:
+        if now.weekday() >= 5:
+            return False
+    mins = now.hour * 60 + now.minute
+    return 9 * 60 + 15 <= mins <= 15 * 60 + 30
+
+
+def _next_jobs(now: datetime, limit: int = 3) -> list[dict]:
+    """Upcoming scheduled jobs for the day (label + HH:MM IST)."""
+    mins_now = now.hour * 60 + now.minute
+    upcoming = [{"time": f"{m // 60:02d}:{m % 60:02d}", "name": label}
+                for m, label in _DAILY_JOBS if m > mins_now]
+    return upcoming[:limit]
+
+
+def _uptime(now: datetime) -> str:
+    delta = now - _START_TIME
+    h, rem = divmod(int(delta.total_seconds()), 3600)
+    m = rem // 60
+    return f"{h}h {m}m" if h else f"{m}m"
+
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)  # no docs in production
 
@@ -149,12 +189,19 @@ def collect_dashboard_data() -> dict:
                "category": e.category, "is_hypothesis": e.is_hypothesis,
                "count": e.observed_count} for e in knowledge[:7]]
 
+        now_ist = datetime.now(IST)
         data = {
-            "timestamp": datetime.now(IST).isoformat(),
+            "timestamp": now_ist.isoformat(),
             "owner": settings.dashboard_owner_name,
             "mode": settings.mode_label,
             "broker": settings.broker_mode,
             "api_active": settings.has_anthropic_key,
+            # Always-present context so the dashboard is useful with zero trades.
+            "nifty_price": regime_data.get("nifty_price"),
+            "nifty_rsi": regime_data.get("rsi"),
+            "market_open": _market_open(now_ist),
+            "system_uptime": _uptime(now_ist),
+            "next_jobs": _next_jobs(now_ist),
             "summary": {
                 "total_trades": summary.get("total_trades", 0),
                 "win_rate": round(summary.get("win_rate", 0) * 100, 1),
