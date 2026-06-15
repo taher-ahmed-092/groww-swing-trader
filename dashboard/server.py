@@ -138,6 +138,12 @@ def collect_dashboard_data() -> dict:
             sim_insights = ForwardSimulator(journal).get_simulation_insights()
         except Exception:
             sim_insights = {}
+        try:
+            from src.learning.intraday_simulator import IntradaySimulator
+
+            intraday_sim = IntradaySimulator().get_summary()
+        except Exception:
+            intraday_sim = {"total": 0, "wins": 0, "losses": 0, "win_rate": 0, "recent": []}
 
         kb = [{"description": e.pattern_description[:60], "confidence": round(e.confidence, 2),
                "category": e.category, "is_hypothesis": e.is_hypothesis,
@@ -167,6 +173,7 @@ def collect_dashboard_data() -> dict:
             "regime": regime_data,
             "strategy_breakdown": strategy_breakdown,
             "sim_insights": sim_insights,
+            "intraday_sim": intraday_sim,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)

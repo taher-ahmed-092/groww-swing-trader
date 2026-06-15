@@ -401,6 +401,44 @@ def weekly_agent_evaluation_job() -> None:
         notifier.send_message("🔧 SYSTEM ENHANCEMENT — no auto-changes this week. 📱 Review suggestions in /enhance.")
 
 
+def intraday_entry_job() -> None:
+    """Mon-Fri 9:30 AM — open 3-5 intraday learning simulations on real NSE data."""
+    if _kill_switch() or _is_paused():
+        return
+    from src.learning.intraday_simulator import IntradaySimulator
+
+    sims = IntradaySimulator().run_morning_entries()
+    if sims:
+        names = ", ".join(s["symbol"] for s in sims)
+        TelegramNotifier().send_message(
+            "🔬 *Daily Learning Started*\n"
+            f"Simulating: {names}\n"
+            f"_{len(sims)} positions open — results at 3:15 PM_"
+        )
+    console.print(f"[cyan][JOB] intraday_entry_job opened {len(sims)} sims[/cyan]")
+
+
+def intraday_exit_job() -> None:
+    """Mon-Fri 3:15 PM — close sims, compute P&L, update the knowledge base."""
+    if _kill_switch():
+        return
+    from src.learning.intraday_simulator import IntradaySimulator
+
+    sim = IntradaySimulator()
+    result = sim.run_afternoon_exits()
+    n = result["closed"]
+    if n > 0:
+        wins, losses = result["wins"], result["losses"]
+        emoji = "🎉" if wins > losses else "📚"
+        TelegramNotifier().send_message(
+            f"{emoji} *Daily Learning Complete*\n"
+            f"{wins}W / {losses}L from {n} simulations\n"
+            "Knowledge base updated.\n"
+            f"Total simulations: {sim.get_summary()['total']}"
+        )
+    console.print(f"[cyan][JOB] intraday_exit_job closed {n} sims[/cyan]")
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if not _acquire_process_lock():
@@ -409,11 +447,13 @@ if __name__ == "__main__":
     console.print(f"[bold green]🚀 groww-swing-trader running | Mode: {settings.broker_mode}[/bold green]")
     console.print(
         "[green]Scheduler active. Jobs: weekly scan (Sun 7pm), daily check (Mon-Fri 9am), "
+        "intraday learning (Mon-Fri 9:30am open / 3:15pm close), "
         "postmarket (Mon-Fri 4pm), daily learning (Mon-Fri 4:30pm), "
         "weekly distillation (Sun 8pm), agent evaluation + enhancer (Sun 8:30pm)[/green]"
     )
-    console.print("[green]Dashboard: uv run python scripts/run_dashboard.py[/green]")
-    console.print("[green]Mobile access: bash deploy/setup_cloudflare_tunnel.sh[/green]")
+    console.print("[green]One command: uv run python scripts/start_everything.py[/green]")
+    console.print("[green]Dashboard only: uv run python scripts/run_dashboard.py[/green]")
+    console.print("[green]Verify setup: uv run python scripts/verify_setup.py[/green]")
     console.print("[green]Press Ctrl+C to stop. KILL_SWITCH file halts all jobs immediately.[/green]")
 
     scheduler = BackgroundScheduler(timezone=TZ)
@@ -426,7 +466,17 @@ if __name__ == "__main__":
     scheduler.add_job(weekly_model_retrain_job, "cron", day_of_week="sun", hour=21, minute=0)
     scheduler.add_job(saturday_batch_job, "cron", day_of_week="sat", hour=19, minute=0)
     scheduler.add_job(sunday_morning_batch_check, "cron", day_of_week="sun", hour=7, minute=0)
+    scheduler.add_job(intraday_entry_job, "cron", day_of_week="mon-fri", hour=9, minute=30)
+    scheduler.add_job(intraday_exit_job, "cron", day_of_week="mon-fri", hour=15, minute=15)
     scheduler.start()
+
+    # Telegram connectivity check — sends a hello message if configured.
+    notifier = TelegramNotifier()
+    tg_result = notifier.test_connection()
+    if tg_result["ok"]:
+        console.print(f"[green]✅ Telegram: connected as {tg_result['bot_name']}[/green]")
+    else:
+        console.print(f"[yellow]⚠️  Telegram: {tg_result['reason']}[/yellow]")
 
     # Telegram command handler runs in a background thread (answers /commands).
     if settings.telegram_bot_token:

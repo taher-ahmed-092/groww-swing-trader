@@ -100,10 +100,61 @@ class CommandHandler:
         self.tg.send_message(text[:_MAX])
 
     # ── handlers ───────────────────────────────────────────────────────────────
+    # Emoji + advice per regime, surfaced by /regime.
+    REGIME_VISUALS = {
+        "BULL_TRENDING": ("🐂", "Full size. Ride the momentum."),
+        "BEAR_TRENDING": ("🐻", "Half size. Pairs trading only."),
+        "VOLATILE": ("⚡", "Half size. Mean reversion only."),
+        "RANGE_BOUND": ("↔️", "Bounces near support. Quick exits."),
+        "RECOVERY": ("🌱", "Half size. Wait for MA200 reclaim."),
+        "TRANSITIONAL": ("🌀", "Reduced size. Wait for clarity."),
+    }
+
+    def _get_learning_status(self) -> str:
+        from src.memory.journal import TradingJournal
+
+        j = TradingJournal()
+        recent = j.get_recent(n=200)
+        closed = len([t for t in recent if t.outcome in ("WIN", "LOSS")])
+        kb = j.get_active_knowledge(min_confidence=0.0)
+        return f"{closed} trades · {len(kb)} patterns learned"
+
     def _start(self, args):
         """welcome + command list"""
-        self._send(f"⚡ *Cosmic Punk* online, {settings.dashboard_owner_name}!\n"
-                   f"Mode: {settings.mode_label}\nType /help for all commands.")
+        from src.utils.tips import get_random_tip
+
+        self._send(
+            "🌌 *Welcome to Cosmic Punk Trading System*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Hey *{settings.dashboard_owner_name}*! "
+            "Your AI trading system is watching Indian markets 24/7.\n\n"
+            f"*Mode:* {settings.mode_label}\n"
+            "*Engine:* 4 strategies + pairs trading\n"
+            f"*Learning:* {self._get_learning_status()}\n\n"
+            "📊 *TRADING*\n"
+            "/scan — scan the watchlist now\n"
+            "/pairs — market-neutral scan (any market)\n"
+            "/positions — open positions\n"
+            "/brief — today's market brief\n\n"
+            "📈 *PERFORMANCE*\n"
+            "/performance — win rate + stats\n"
+            "/chart — P&L chart image\n"
+            "/trades — last 10 trades\n"
+            "/wins — greatest wins\n"
+            "/lessons — what losses taught us\n\n"
+            "🧠 *LEARNING*\n"
+            "/knowledge — what the system learned\n"
+            "/regime — current market regime\n"
+            "/evaluation — agent accuracy\n"
+            "/enhance — weekly improvement ideas\n\n"
+            "🖥️ *SYSTEM*\n"
+            "/dashboard_link — your private dashboard\n"
+            "/health — full system status\n"
+            "/kill — emergency stop\n"
+            "/help — detailed command list\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 _{get_random_tip()}_"
+        )
 
     def _help(self, args):
         """grouped command list"""
@@ -265,8 +316,19 @@ class CommandHandler:
         from src.data.regime_detector import RegimeDetector
 
         r = RegimeDetector().detect()
-        self._send(f"🌍 *Regime*: {r['regime']}\n{r['strategy']}\n"
-                   f"Size multiplier: {r.get('size_multiplier', 1)}×")
+        regime = r.get("regime", "UNKNOWN")
+        emoji, advice = self.REGIME_VISUALS.get(regime, ("❓", "Unknown — trade cautiously."))
+        self._send(
+            f"{emoji} *MARKET REGIME: {regime}*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 Nifty: ₹{(r.get('nifty_price') or 0):,.0f}\n"
+            f"📈 RSI: {(r.get('rsi') or 0):.1f}\n"
+            f"📉 MA50: ₹{(r.get('ma50') or 0):,.0f}\n"
+            f"📉 MA200: ₹{(r.get('ma200') or 0):,.0f}\n\n"
+            f"💡 *Advice:* {advice}\n"
+            f"📐 *Position sizing:* {(r.get('size_multiplier') or 1):.0%} capacity\n\n"
+            f"_Strategy: {str(r.get('strategy', ''))[:90]}_"
+        )
 
     def _scan(self, args):
         """run a scout scan"""
@@ -321,17 +383,38 @@ class CommandHandler:
 
     def _health(self, args):
         """system health"""
+        from src.analytics.performance import PerformanceAnalyzer
         from src.memory.journal import TradingJournal
+        from src.utils.tips import get_random_tip
 
         j = TradingJournal()
+        summary = PerformanceAnalyzer().get_summary()
+        kb = j.get_active_knowledge(min_confidence=0.0)
         try:
             cost = j.get_monthly_cost()
         except Exception:
             cost = 0
-        self._send(f"🏥 *Health*\nMode: {settings.mode_label} | Broker: {settings.broker_mode}\n"
-                   f"API: {'✅' if settings.has_anthropic_key else '🧪 demo'}\n"
-                   f"Kill switch: {'🔴' if Path(LIMITS.kill_switch_file).exists() else '🟢'}\n"
-                   f"API cost this month: ₹{cost:.2f}")
+        kill = Path(LIMITS.kill_switch_file).exists()
+        paused = Path(_PAUSE_FILE).exists()
+        status = "🚨 KILL SWITCH" if kill else ("⏸️ PAUSED" if paused else "✅ RUNNING")
+        api = "✅ Active" if settings.has_anthropic_key else "🧪 Demo mode"
+        groww = "✅ Active" if settings.has_groww_credentials else "⏳ Not yet"
+        self._send(
+            "🏥 *SYSTEM HEALTH*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Status:    {status}\n"
+            f"Mode:      {settings.mode_label}\n"
+            f"Anthropic: {api}\n"
+            f"Groww:     {groww}\n\n"
+            "📊 *TRADING*\n"
+            f"Trades:    {summary.get('total_trades', 0)} total\n"
+            f"Win rate:  {summary.get('win_rate', 0) * 100:.1f}%\n"
+            f"P&L:       ₹{summary.get('total_pnl_inr', 0):+.2f}\n\n"
+            "🧠 *LEARNING*\n"
+            f"Patterns:  {len(kb)} in knowledge base\n"
+            f"API cost:  ₹{cost:.2f} this month\n\n"
+            f"💡 _{get_random_tip()}_"
+        )
 
     def _chart(self, args):
         """performance chart"""

@@ -28,11 +28,33 @@ _EMOJIS = ["📊", "📈", "🎯", "💹", "🔔", "⚡", "🌟"]
 class TelegramNotifier:
     def __init__(self) -> None:
         self.token = settings.telegram_bot_token
-        self.chat_id = settings.telegram_chat_id
-        self.enabled = bool(self.token and self.chat_id)
+        # Telegram chat ids are integers; normalise to the canonical str form so
+        # every send uses a valid chat_id (a non-numeric .env value disables sends).
+        chat_int = settings.telegram_chat_id_int
+        self.chat_id = str(chat_int) if chat_int is not None else ""
+        self.enabled = bool(self.token and chat_int is not None)
 
     def is_configured(self) -> bool:
         return self.enabled
+
+    def test_connection(self) -> dict:
+        """Verify the bot token via getMe and send a hello message. Called on startup."""
+        if not self.is_configured():
+            return {"ok": False, "reason": "Missing BOT_TOKEN or CHAT_ID in .env"}
+        try:
+            r = requests.get(_API_BASE.format(token=self.token, method="getMe"), timeout=10)
+            if r.status_code != 200:
+                return {"ok": False, "reason": f"Invalid token (HTTP {r.status_code})"}
+            bot_name = r.json()["result"]["first_name"]
+            self.send_message(
+                f"🚀 *{bot_name}* is online!\n\n"
+                f"Mode: {settings.mode_label}\n"
+                "Type /start to see all commands.\n\n"
+                "_The system is watching the markets for you._"
+            )
+            return {"ok": True, "bot_name": bot_name}
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            return {"ok": False, "reason": str(exc)}
 
     # ── low-level ──────────────────────────────────────────────────────────────
     def _call(self, method: str, params: dict, timeout: int = 15) -> dict | None:

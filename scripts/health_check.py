@@ -70,6 +70,7 @@ KEY_MODULES = [
     "src.sentiment.finbert",
     "src.ml.signal_combiner",
     "src.learning.forward_simulator",
+    "src.learning.intraday_simulator",
     "dashboard.server",
     "dashboard.chart_generator",
     "src.notifications.command_handler",

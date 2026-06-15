@@ -53,8 +53,17 @@ class Settings(BaseSettings):
         return all([self.groww_api_key, self.groww_api_secret, self.groww_access_token])
 
     @property
+    def telegram_chat_id_int(self) -> int | None:
+        """Chat id as an int, or None if unset/non-numeric. Telegram chat ids are
+        integers; storing as str keeps Pydantic happy, this parses on demand."""
+        try:
+            return int(self.telegram_chat_id) if self.telegram_chat_id else None
+        except ValueError:
+            return None
+
+    @property
     def has_telegram(self) -> bool:
-        return bool(self.telegram_bot_token and self.telegram_chat_id)
+        return bool(self.telegram_bot_token and self.telegram_chat_id_int is not None)
 
     @property
     def has_finnhub(self) -> bool:
