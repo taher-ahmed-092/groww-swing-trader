@@ -47,6 +47,7 @@ class CommandHandler:
             "/dashboard_link": self._dashboard_link, "/strategies": self._strategies,
             "/pairs": self._pairs, "/mode": self._mode, "/conserve": self._conserve,
             "/balanced": self._balanced, "/rogue": self._rogue,
+            "/learning": self._learning,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -453,6 +454,34 @@ class CommandHandler:
         self._send("🧠 *Strategy performance*\n" + "\n".join(
             f"{n}: {('%.0f%%' % (d['win_rate'] * 100)) if d.get('win_rate') is not None else '—'} "
             f"({d['trades']})" for n, d in bd.items()))
+
+    def _learning(self, args):
+        """24/7 learning status"""
+        from src.data.watchlist import ALL_STOCKS
+        from src.learning.historical_replay import HistoricalReplayEngine
+        from src.memory.journal import TradingJournal
+
+        stats = HistoricalReplayEngine().get_stats()
+        kb = TradingJournal().get_active_knowledge(min_confidence=0.0)
+        replay_kb = [e for e in kb if e.category == "HISTORICAL_REPLAY"]
+        intraday_kb = [e for e in kb if e.category == "INTRADAY_SIMULATION"]
+        real_kb = [e for e in kb if e.category not in ("HISTORICAL_REPLAY", "INTRADAY_SIMULATION")]
+        top = sorted(kb, key=lambda e: -e.confidence)[:3]
+        top_text = "\n".join(f"  [{e.confidence:.2f}] {e.pattern_description[:50]}"
+                             for e in top) or "  (building…)"
+        self._send(
+            "📚 *Learning Status*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*Knowledge Base:*\n"
+            f"From real trades:    {len(real_kb)} patterns\n"
+            f"From intraday sims:  {len(intraday_kb)} patterns\n"
+            f"From history replay: {len(replay_kb)} patterns\n"
+            f"Total:               {len(kb)} patterns\n\n"
+            "*Replay Coverage:*\n"
+            f"Stocks replayed: {stats['total_stocks_replayed']}/{len(ALL_STOCKS)}\n"
+            f"Stocks pending:  {stats['stocks_pending']}\n\n"
+            f"*Top Patterns:*\n{top_text}\n\n"
+            "_Replays run every 2h. The system never stops learning._")
 
     def _mode(self, args):
         """show/set trading mode"""

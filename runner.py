@@ -17,6 +17,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from rich.console import Console
@@ -49,6 +50,7 @@ console = Console()
 _CANDIDATES_FILE = os.path.join("data", "cache", "weekly_candidates.json")
 _DISTILL_MARKER = os.path.join("data", "cache", "last_distill.txt")
 TZ = "Asia/Kolkata"
+IST = ZoneInfo(TZ)
 
 
 _PAUSE_FILE = os.path.join("data", "cache", "trading_paused.txt")
@@ -489,6 +491,51 @@ def hourly_health_job() -> None:
         console.print(f"[red][JOB] hourly_health_job DB error: {exc}[/red]")
 
 
+def off_hours_replay_job() -> None:
+    """Every 2 hours, 24/7 — replay historical days to grow the knowledge base.
+    Lighter batch during market hours (real scans take priority), full at night."""
+    if _kill_switch():
+        return
+    from src.learning.historical_replay import HistoricalReplayEngine
+
+    now_ist = datetime.now(IST)
+    h, m = now_ist.hour, now_ist.minute
+    market_open = (9 <= h < 15) or (h == 15 and m <= 30)
+    engine = HistoricalReplayEngine()
+    if market_open:
+        result = engine.run_batch(n_stocks=5, n_days_each=3)
+    else:
+        result = engine.run_batch(n_stocks=15, n_days_each=5)
+
+    console.print(
+        f"[cyan][JOB] replay: {result['replayed']} stocks, {result['signals_found']} signals, "
+        f"{result['wins']}W/{result['losses']}L, {result['patterns_added']} new patterns[/cyan]")
+
+    # Telegram digest only at 8 AM / 2 PM / 8 PM and only when meaningful.
+    if result["patterns_added"] >= 3 and now_ist.hour in (8, 14, 20):
+        stats = engine.get_stats()
+        TelegramNotifier().send_message(
+            "🎓 *Overnight Learning Update*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Replayed: {result['replayed']} stocks\n"
+            f"Signals found: {result['signals_found']}\n"
+            f"Outcomes: {result['wins']}W / {result['losses']}L\n"
+            f"New patterns: {result['patterns_added']}\n\n"
+            f"📚 Total replay patterns: {stats['replay_patterns_in_kb']}\n"
+            f"Stocks remaining to replay: {stats['stocks_pending']}\n\n"
+            "_The system never stops learning._")
+
+
+def deep_replay_job() -> None:
+    """Nightly 11:30 PM IST — deeper replay (more days per stock)."""
+    if _kill_switch():
+        return
+    from src.learning.historical_replay import HistoricalReplayEngine
+
+    result = HistoricalReplayEngine().run_batch(n_stocks=25, n_days_each=10)
+    console.print(f"[cyan][JOB] deep replay: {result}[/cyan]")
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     if not _acquire_process_lock():
@@ -522,6 +569,8 @@ if __name__ == "__main__":
     scheduler.add_job(midday_guarantee_job, "cron", day_of_week="mon-fri", hour=12, minute=30)
     scheduler.add_job(afternoon_guarantee_job, "cron", day_of_week="mon-fri", hour=14, minute=0)
     scheduler.add_job(hourly_health_job, "cron", minute=0)
+    scheduler.add_job(off_hours_replay_job, "cron", hour="*/2", minute=15)
+    scheduler.add_job(deep_replay_job, "cron", hour=23, minute=30)
     scheduler.start()
 
     # Telegram connectivity check — sends a hello message if configured.

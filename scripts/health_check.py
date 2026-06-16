@@ -71,6 +71,7 @@ KEY_MODULES = [
     "src.ml.signal_combiner",
     "src.learning.forward_simulator",
     "src.learning.intraday_simulator",
+    "src.learning.historical_replay",
     "src.data.watchlist",
     "src.trading.modes",
     "src.trading.daily_guarantee",
