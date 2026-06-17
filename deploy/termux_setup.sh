@@ -1,6 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Cosmic Punk on Android (Termux) — run the trader 24/7 from a spare phone.
-# Free, low-power, always-on. See deploy/TERMUX_GUIDE.md for the full walkthrough.
+# Cosmic Punk on Android — NATIVE Termux install (advanced, not recommended).
+#
+# The mandatory Rust deps (pydantic-core, uuid-utils, jiter, ...) have no Android
+# wheels, so this path compiles from source and needs `pkg install rust`; uuid-utils
+# can still fail on the aarch64-android target. The RELIABLE path is proot-distro
+# (glibc Ubuntu), where every wheel installs without compiling — see TERMUX_GUIDE.md.
 set -e
 
 echo "=== Cosmic Punk — Termux setup ==="
