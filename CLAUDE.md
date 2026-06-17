@@ -6,7 +6,7 @@ Personal swing-trading system for NSE/BSE via Groww API. Personal use only, not 
 AI-driven multi-agent system: research → fundamental analysis → technical analysis → LLM judge → risk check → human approval → execution → post-trade reflection. Default mode is paper trading (no real orders).
 
 ## Tech stack
-- Orchestration: LangGraph (src/orchestrator/graph.py) — StateGraph with SqliteSaver checkpointer
+- Orchestration: LangGraph (src/orchestrator/graph.py) — StateGraph with in-memory checkpointer (MemorySaver; the SQLite checkpointer was dropped because its sqlite-vec dep has no Android/Termux wheel)
 - Agents: scout → fundamental → technical → judge → executor
 - LLM: claude-sonnet-4-20250514 via langchain-anthropic (never hardcode model strings elsewhere)
 - Broker: PaperBroker (default) or GrowwBroker (requires LIVE_TRADING_ENABLED=true + keys)

@@ -14,10 +14,9 @@ Run paper-mode demo:
 from __future__ import annotations
 
 import os
-import sqlite3
 from functools import wraps
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from rich.console import Console
 
@@ -41,8 +40,6 @@ from src.orchestrator.state import TradeState, get_initial_state
 from src.risk.checker import RiskChecker
 
 console = Console()
-
-CHECKPOINT_DB = os.path.join("data", "journal", "checkpoints.db")
 
 
 def _kill_switch_active() -> bool:
@@ -294,11 +291,11 @@ def build_graph() -> StateGraph:
 
 
 def compile_app():
-    os.makedirs(os.path.dirname(CHECKPOINT_DB), exist_ok=True)
-    # Own the sqlite connection directly so it stays open for the process lifetime.
-    # check_same_thread=False keeps it usable if LangGraph touches another thread.
-    conn = sqlite3.connect(CHECKPOINT_DB, check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
+    # In-memory checkpointer — no native deps (the SQLite checkpointer pulled in
+    # sqlite-vec, which has no Android/Termux wheel). State persists for the process
+    # lifetime, which is all the one-shot graph invocations need; the durable record
+    # of every trade lives in the journal DB (data/journal/trades.db), not here.
+    checkpointer = MemorySaver()
 
     graph = build_graph()
 
