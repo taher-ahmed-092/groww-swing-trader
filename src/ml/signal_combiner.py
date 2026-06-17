@@ -16,6 +16,18 @@ from src.memory.journal import TradingJournal
 
 log = logging.getLogger(__name__)
 
+# xgboost is an OPTIONAL extra (`uv sync --extra ml`). It has no Android/Termux
+# wheel and compiles slowly, so the default install omits it. The combiner only
+# activates after 30+ closed trades anyway; without it, predict returns None and
+# the judge score stands — the system works fine.
+try:
+    import xgboost as xgb
+
+    XGBOOST_AVAILABLE = True
+except ImportError:
+    xgb = None
+    XGBOOST_AVAILABLE = False
+
 MODEL_FILE = Path("data/models/signal_combiner.json")
 MIN_TRADES_TO_TRAIN = 30
 
@@ -48,13 +60,15 @@ class SignalCombiner:
         }
 
     def train(self) -> dict:
+        if not XGBOOST_AVAILABLE:
+            return {"trained": False, "n_samples": 0,
+                    "message": "XGBoost not installed. Install with: uv sync --extra ml"}
         closed = [t for t in self.journal.get_recent(n=200) if t.outcome in ("WIN", "LOSS")]
         if len(closed) < self.MIN_TRADES_TO_TRAIN:
             return {"trained": False, "n_samples": len(closed),
                     "message": f"Need {self.MIN_TRADES_TO_TRAIN}, have {len(closed)}"}
 
         import numpy as np
-        import xgboost as xgb
 
         X, y = [], []
         for t in closed:
@@ -80,11 +94,10 @@ class SignalCombiner:
                 "top_features": [(f, round(float(i), 3)) for f, i in top]}
 
     def predict_win_probability(self, state: dict) -> float | None:
-        if not self.MODEL_FILE.exists():
+        if not XGBOOST_AVAILABLE or not self.MODEL_FILE.exists():
             return None
         try:
             import numpy as np
-            import xgboost as xgb
 
             model = xgb.XGBClassifier()
             model.load_model(str(self.MODEL_FILE))

@@ -33,9 +33,14 @@ dependencies = [
     "ta>=0.11.0",
     "transformers>=5.12.0",
     "uvicorn[standard]>=0.49.0",
-    "xgboost>=3.2.0",
     "yfinance>=1.4.1",
 ]
+
+[project.optional-dependencies]
+# xgboost has no Android/Termux wheel and pulls a 300MB CUDA dep (nvidia-nccl) on
+# Linux. It's only the signal combiner (activates after 30+ closed trades), so it's
+# optional. Laptop: `uv sync --extra ml`. Default install omits it and runs fine.
+ml = ["xgboost>=2.0.0"]
 
 [dependency-groups]
 dev = [
