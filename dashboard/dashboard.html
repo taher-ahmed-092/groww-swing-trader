@@ -202,6 +202,23 @@
     </table>
   </div>
 
+  <!-- 13 Forced learning trades -->
+  <div class="panel full" id="panel-forced">
+    <h2>⚡ Forced Trades Today</h2>
+    <div class="stat-row">
+      <div class="stat"><div class="v" id="forced-total">0</div><div class="l">Placed Today</div></div>
+      <div class="stat"><div class="v" id="forced-wl">0W / 0L</div><div class="l">Win / Loss</div></div>
+      <div class="stat"><div class="sim-status-badge" id="forced-status">Idle</div>
+        <div class="l" style="margin-top:6px">Engine</div></div>
+    </div>
+    <table class="mini-table" style="margin-top:12px">
+      <thead><tr><th>Symbol</th><th>Result</th><th>P&amp;L</th><th>Type</th></tr></thead>
+      <tbody id="forced-recent-rows"></tbody>
+    </table>
+    <div class="muted" style="font-size:11px;margin-top:8px">Paper simulations — stop-loss always
+      applied, segregated from real signal metrics.</div>
+  </div>
+
   <!-- 7 Knowledge base -->
   <div class="panel full">
     <h2>🧠 What the System Has Learned</h2>
@@ -473,6 +490,25 @@ function updateLearningPanel(d){
     tbody.appendChild(tr);});
 }
 
+function updateForcedPanel(d){
+  const f=d.forced_trades||{};
+  document.getElementById('forced-total').textContent=f.total||0;
+  document.getElementById('forced-wl').textContent=`${f.wins||0}W / ${f.losses||0}L`;
+  const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  const h=ist.getHours(),m=ist.getMinutes(),day=ist.getDay();
+  const open=day>=1&&day<=5&&(h>9||(h===9&&m>=15))&&(h<15||(h===15&&m<=30));
+  document.getElementById('forced-status').textContent=open?'⚡ LEARNING NOW':'🌙 Off-hours sims';
+  const tbody=document.getElementById('forced-recent-rows');tbody.innerHTML='';
+  (f.recent||[]).slice().reverse().slice(0,5).forEach(t=>{
+    const tr=document.createElement('tr');
+    const cls=t.outcome==='WIN'?'win-sim':'loss-sim',icon=t.outcome==='WIN'?'✅':t.outcome==='LOSS'?'❌':'⏳';
+    const pnl=(t.pnl_pct!=null?t.pnl_pct:0);
+    tr.innerHTML=`<td>${t.symbol}</td><td class="${cls}">${icon}</td>`+
+      `<td class="${cls}">${pnl>0?'+':''}${pnl.toFixed(1)}%</td>`+
+      `<td style="color:var(--muted);font-size:10px">${(t.trade_type||'').replace('_FORCED','').slice(0,10)}</td>`;
+    tbody.appendChild(tr);});
+}
+
 function updateDashboard(d){
   if(d.error){document.getElementById('conn').textContent='● error';return;}
   lastData=d;
@@ -493,6 +529,7 @@ function updateDashboard(d){
   updatePositions(d.positions);updatePnlChart(d.pnl_history||[]);updateWL(d.wl_chart);
   updateKnowledge(d.knowledge);updateRegime(d.regime);updateStrategies(d.strategy_breakdown);
   updateSimInsights(d.sim_insights);renderConstellation(d.knowledge);updateLearningPanel(d);
+  updateForcedPanel(d);
   const nextJob=(d.next_jobs&&d.next_jobs[0])?`Next: ${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'No more jobs today';
   document.getElementById('sysstatus').textContent=
     `Mode ${d.mode} · Broker ${d.broker} · ${d.market_open?'🟢 NSE open':'🔴 NSE closed'} · `+

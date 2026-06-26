@@ -75,6 +75,7 @@ KEY_MODULES = [
     "src.data.watchlist",
     "src.trading.modes",
     "src.trading.daily_guarantee",
+    "src.trading.always_on_trader",
     "dashboard.server",
     "dashboard.chart_generator",
     "src.notifications.command_handler",

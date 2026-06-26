@@ -47,7 +47,8 @@ class CommandHandler:
             "/dashboard_link": self._dashboard_link, "/strategies": self._strategies,
             "/pairs": self._pairs, "/mode": self._mode, "/conserve": self._conserve,
             "/balanced": self._balanced, "/rogue": self._rogue,
-            "/learning": self._learning,
+            "/learning": self._learning, "/forced": self._forced,
+            "/force_now": self._force_now,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -482,6 +483,50 @@ class CommandHandler:
             f"Stocks pending:  {stats['stocks_pending']}\n\n"
             f"*Top Patterns:*\n{top_text}\n\n"
             "_Replays run every 2h. The system never stops learning._")
+
+    def _forced(self, args):
+        """forced learning trade stats"""
+        from src.trading.always_on_trader import AlwaysOnTrader
+
+        trader = AlwaysOnTrader()
+        s = trader.get_todays_summary()
+        history = trader._load_history()
+        total_all = len(history)
+        wins_all = sum(1 for t in history if t.get("outcome") == "WIN")
+        wr_all = round(wins_all / total_all * 100, 1) if total_all else 0
+        self._send(
+            "📊 *Forced Learning Trades*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "*Today:*\n"
+            f"Trades: {s['total']}\n"
+            f"Result: {s['wins']}W / {s['losses']}L\n"
+            f"Win rate: {s['win_rate']:.0f}%\n\n"
+            "*All time:*\n"
+            f"Total: {total_all} forced trades\n"
+            f"Win rate: {wr_all:.0f}%\n\n"
+            "_Paper simulations that run regardless of market conditions.\n"
+            "Stop-loss always applied; segregated from real signal metrics._")
+
+    def _force_now(self, args):
+        """place forced trades immediately"""
+        from src.trading.always_on_trader import AlwaysOnTrader
+
+        trader = AlwaysOnTrader()
+        trades = trader.ensure_daily_trades()
+        if not trades:
+            self._send(f"Already placed {trader._count_todays_forced_trades()} trades today. "
+                       f"Daily target ({trader.TARGET_DAILY_TRADES}) reached.")
+            return
+        for t in trades:
+            self._send(
+                "⚡ *Forced Trade Placed*\n"
+                f"Symbol: *{t['symbol']}*\n"
+                f"Entry: ₹{t['entry']:.2f}\n"
+                f"Stop: ₹{t['stop']:.2f} _(always applied)_\n"
+                f"Target: ₹{t['target']:.2f}\n"
+                f"Type: {t['trade_type']}\n"
+                f"Score: {t['signal_score']:.2f}\n"
+                f"_{t['rationale']}_")
 
     def _mode(self, args):
         """show/set trading mode"""
