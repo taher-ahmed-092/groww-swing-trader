@@ -503,9 +503,9 @@ def off_hours_replay_job() -> None:
     market_open = (9 <= h < 15) or (h == 15 and m <= 30)
     engine = HistoricalReplayEngine()
     if market_open:
-        result = engine.run_batch(n_stocks=5, n_days_each=3)
+        result = engine.run_batch(n_stocks=20, n_days_each=3)
     else:
-        result = engine.run_batch(n_stocks=15, n_days_each=5)
+        result = engine.run_batch(n_stocks=30, n_days_each=5)
 
     console.print(
         f"[cyan][JOB] replay: {result['replayed']} stocks, {result['signals_found']} signals, "
@@ -532,12 +532,36 @@ def deep_replay_job() -> None:
         return
     from src.learning.historical_replay import HistoricalReplayEngine
 
-    result = HistoricalReplayEngine().run_batch(n_stocks=25, n_days_each=10)
+    result = HistoricalReplayEngine().run_batch(n_stocks=50, n_days_each=15)
     console.print(f"[cyan][JOB] deep replay: {result}[/cyan]")
 
 
-def forced_trade_morning_job() -> None:
-    """Mon-Fri 9:45 AM — place the day's forced learning trades (best available)."""
+_LAST_FORCED_NOTIFY = Path("data/cache/last_forced_notify.txt")
+
+
+def _should_notify_forced() -> bool:
+    """File-based rate limit — at most one 'trades placed' Telegram message/hour."""
+    try:
+        if not _LAST_FORCED_NOTIFY.exists():
+            return True
+        last = float(_LAST_FORCED_NOTIFY.read_text() or 0)
+        return (time.time() - last) > 3600
+    except OSError:
+        return True
+
+
+def _mark_notified_forced() -> None:
+    try:
+        _LAST_FORCED_NOTIFY.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_FORCED_NOTIFY.write_text(str(time.time()))
+    except OSError:
+        pass
+
+
+def forced_trade_job() -> None:
+    """Every 15 minutes, all day, 24/7 — place forced learning trades. No hour
+    restriction: market hours score+place live candidates, off-hours run
+    historical simulations. Volume, not timing, is the point."""
     if _kill_switch() or _is_paused():
         return
     from src.trading.always_on_trader import AlwaysOnTrader
@@ -546,29 +570,17 @@ def forced_trade_morning_job() -> None:
     for t in trades:
         console.print(f"[cyan][FORCED] {t['symbol']} entry=₹{t['entry']:.2f} "
                       f"stop=₹{t['stop']:.2f} score={t['signal_score']:.2f}[/cyan]")
-    if trades:
-        symbols = ", ".join(t["symbol"] for t in trades)
-        TelegramNotifier().send_message(
-            "📊 *Forced Learning Trades*\n"
-            f"Placed: {symbols}\n"
-            "45-min holds. Learning from outcomes.\n"
-            "Stop-loss applied on every trade. (Paper simulations, not pipeline trades.)")
+    if trades and _should_notify_forced():
+        lines = [f"⚡ *{len(trades)} learning trades*"]
+        for t in trades:
+            lines.append(f"📊 {t['symbol']} ₹{t['entry']:.0f} → stop ₹{t['stop']:.0f}")
+        TelegramNotifier().send_message("\n".join(lines))
+        _mark_notified_forced()
 
 
-def forced_trade_midday_job() -> None:
-    """Mon-Fri 12:00 PM — top up forced trades if we're short of the daily target."""
-    if _kill_switch() or _is_paused():
-        return
-    from src.trading.always_on_trader import AlwaysOnTrader
-
-    trader = AlwaysOnTrader()
-    if trader._count_todays_forced_trades() < 2:
-        trades = trader.ensure_daily_trades()
-        console.print(f"[cyan][JOB] midday forced: placed {len(trades)} trades[/cyan]")
-
-
-def forced_trade_close_job() -> None:
-    """Mon-Fri every 30 min (10:00-15:30) — close forced trades at the 45-min mark."""
+def forced_close_job() -> None:
+    """Every 15 minutes, all day, 24/7 (offset from forced_trade_job) — close
+    forced trades that have hit the 15-min hold mark."""
     if _kill_switch():
         return
     from src.trading.always_on_trader import AlwaysOnTrader
@@ -576,26 +588,28 @@ def forced_trade_close_job() -> None:
     closed = AlwaysOnTrader().close_open_forced_trades()
     if closed:
         wins = sum(1 for t in closed if t["outcome"] == "WIN")
-        console.print(f"[cyan][JOB] forced closed: {wins}W {len(closed) - wins}L[/cyan]")
+        console.print(f"[cyan][FORCED CLOSE] {len(closed)} trades: "
+                      f"{wins}W/{len(closed) - wins}L[/cyan]")
 
 
-def off_hours_forced_job() -> None:
-    """7 AM + 8 PM IST daily — historical-sim forced trades so learning runs 24/7."""
-    if _kill_switch() or _is_paused():
+def daily_forced_summary_job() -> None:
+    """Mon-Fri 4:00 PM IST — one daily learning summary instead of per-close spam."""
+    if _kill_switch():
         return
+    from src.learning.historical_replay import HistoricalReplayEngine
     from src.trading.always_on_trader import AlwaysOnTrader
 
-    trader = AlwaysOnTrader()
-    if trader._count_todays_forced_trades() < 3:
-        trades = trader.ensure_daily_trades()
-        console.print(f"[cyan][JOB] off-hours forced: placed {len(trades)} trades[/cyan]")
-        if trades:
-            s = trader.get_todays_summary()
-            TelegramNotifier().send_message(
-                "🌙 *Evening Learning*\n"
-                f"Today's forced trades: {s['total']} total\n"
-                f"{s['wins']}W / {s['losses']}L\n"
-                f"Win rate: {s['win_rate']:.0f}%")
+    summary = AlwaysOnTrader().get_todays_summary()
+    try:
+        kb_count = HistoricalReplayEngine().get_stats().get("replay_patterns_in_kb", 0)
+    except Exception:
+        kb_count = 0
+    TelegramNotifier().send_message(
+        "📊 *Daily Learning Summary*\n"
+        f"Forced trades: {summary['total']}\n"
+        f"{summary['wins']}W / {summary['losses']}L\n"
+        f"Win rate: {summary['win_rate']:.0f}%\n"
+        f"KB patterns: {kb_count}")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -633,10 +647,9 @@ if __name__ == "__main__":
     scheduler.add_job(hourly_health_job, "cron", minute=0)
     scheduler.add_job(off_hours_replay_job, "cron", hour="*/2", minute=15)
     scheduler.add_job(deep_replay_job, "cron", hour=23, minute=30)
-    scheduler.add_job(forced_trade_morning_job, "cron", day_of_week="mon-fri", hour=9, minute=45)
-    scheduler.add_job(forced_trade_midday_job, "cron", day_of_week="mon-fri", hour=12, minute=0)
-    scheduler.add_job(forced_trade_close_job, "cron", day_of_week="mon-fri", hour="10-15", minute="*/30")
-    scheduler.add_job(off_hours_forced_job, "cron", hour="7,20", minute=0)
+    scheduler.add_job(forced_trade_job, "cron", minute="*/15")
+    scheduler.add_job(forced_close_job, "cron", minute="7,22,37,52")
+    scheduler.add_job(daily_forced_summary_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
     scheduler.start()
 
     # Telegram connectivity check — sends a hello message if configured.

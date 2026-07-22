@@ -27,11 +27,15 @@ _ALL_NEGATIVE = {
 
 
 def test_piotroski_all_points():
-    assert piotroski_f_score(_ALL_POSITIVE) == 9
+    score, evaluated = piotroski_f_score(_ALL_POSITIVE)
+    assert score == 9
+    assert evaluated == 9
 
 
 def test_piotroski_no_points():
-    assert piotroski_f_score(_ALL_NEGATIVE) == 0
+    score, evaluated = piotroski_f_score(_ALL_NEGATIVE)
+    assert score == 0
+    assert evaluated == 9
 
 
 def test_piotroski_label_strong():
@@ -43,17 +47,27 @@ def test_piotroski_label_strong():
 
 
 def test_piotroski_label_weak():
-    # Only F1 + F2 true → 2 → WEAK.
+    # Only F1/F2/F4 evaluable (no YoY fields) → too few signals evaluated to
+    # label a stock WEAK off missing data — must read as INSUFFICIENT_DATA.
     info = {"returnOnAssets": 0.1, "operatingCashflow": 100, "netIncome": 200}
     out = compute_ratios(info)
     assert out["piotroski_score"] <= 3
+    assert out["piotroski_label"] == "INSUFFICIENT_DATA"
+
+
+def test_piotroski_label_weak_with_full_data():
+    # All 9 signals evaluable and genuinely bad → WEAK, not a data-missing label.
+    score, evaluated = piotroski_f_score(_ALL_NEGATIVE)
+    assert evaluated == 9
+    out = compute_ratios(_ALL_NEGATIVE)
     assert out["piotroski_label"] == "WEAK"
 
 
 def test_piotroski_missing_data():
-    score = piotroski_f_score({})
+    score, evaluated = piotroski_f_score({})
     assert 0 <= score <= 9
-    assert compute_ratios({})["piotroski_label"] in ("STRONG", "NEUTRAL", "WEAK")
+    assert evaluated == 0
+    assert compute_ratios({})["piotroski_label"] in ("STRONG", "NEUTRAL", "WEAK", "INSUFFICIENT_DATA")
 
 
 def test_fcf_yield_computed():

@@ -191,6 +191,35 @@ def collect_dashboard_data() -> dict:
         except Exception:
             forced_summary = {"total": 0, "wins": 0, "losses": 0, "win_rate": 0, "recent": []}
 
+        try:
+            import json as _json
+
+            forced_history = []
+            forced_file = Path("data/cache/forced_trades_history.json")
+            if forced_file.exists():
+                forced_history = _json.loads(forced_file.read_text())
+            forced_total = len(forced_history)
+            forced_wins = sum(1 for t in forced_history if t.get("outcome") == "WIN")
+            kb_count = len(knowledge)
+            try:
+                from src.learning.historical_replay import HistoricalReplayEngine
+
+                replay_kb = HistoricalReplayEngine().get_stats().get("replay_patterns_in_kb", 0)
+            except Exception:
+                replay_kb = 0
+            learning_metrics = {
+                "forced_total": forced_total,
+                "forced_wins": forced_wins,
+                "forced_wr": round(forced_wins / forced_total * 100, 1) if forced_total else 0,
+                "kb_patterns": kb_count,
+                "replay_patterns": replay_kb,
+                "xgboost_progress": min(100, round(
+                    (forced_total * 0.3 + summary.get("total_trades", 0)) / 30 * 100)),
+            }
+        except Exception:
+            learning_metrics = {"forced_total": 0, "forced_wins": 0, "forced_wr": 0,
+                                "kb_patterns": 0, "replay_patterns": 0, "xgboost_progress": 0}
+
         kb = [{"description": e.pattern_description[:60], "confidence": round(e.confidence, 2),
                "category": e.category, "is_hypothesis": e.is_hypothesis,
                "count": e.observed_count} for e in knowledge[:7]]
@@ -228,6 +257,7 @@ def collect_dashboard_data() -> dict:
             "sim_insights": sim_insights,
             "intraday_sim": intraday_sim,
             "forced_trades": forced_summary,
+            "learning_metrics": learning_metrics,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)

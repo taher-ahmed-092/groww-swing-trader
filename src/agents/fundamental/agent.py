@@ -98,6 +98,7 @@ class FundamentalAgent:
             "net_profit_ttm_cr": sdata.get("net_profit_ttm_cr"),
             # Research-backed signals (from yfinance-derived ratios).
             "piotroski_score": yf_ratios.get("piotroski_score"),
+            "piotroski_signals_evaluated": yf_ratios.get("piotroski_signals_evaluated"),
             "piotroski_label": yf_ratios.get("piotroski_label"),
             "fcf_yield": yf_ratios.get("fcf_yield"),
             "fcf_yield_label": yf_ratios.get("fcf_yield_label"),

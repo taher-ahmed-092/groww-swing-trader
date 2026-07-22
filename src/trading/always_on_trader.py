@@ -21,31 +21,29 @@ from __future__ import annotations
 import json
 import logging
 import random
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
-from src.data.watchlist import ALL_STOCKS, LARGE_CAP, MID_CAP, SMALL_CAP
+from src.data.watchlist import ALL_STOCKS, LARGE_CAP
 from src.memory.journal import KnowledgeEntry, TradingJournal
 
 log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
-# Forced-trade universe: liquid large-cap + volatile mid-cap + opportunity small-cap.
-FORCED_TRADE_UNIVERSE = (
-    list(LARGE_CAP.keys())[:15] + list(MID_CAP.keys())[:15] + list(SMALL_CAP.keys())[:10]
-)
+# Forced-trade universe: every stock in the watchlist, for maximum learning diversity.
+FORCED_TRADE_UNIVERSE = list(ALL_STOCKS.keys())
 
 FORCED_TRADE_FILE = Path("data/cache/forced_trades_today.json")
 FORCED_HISTORY_FILE = Path("data/cache/forced_trades_history.json")
 
 
 class AlwaysOnTrader:
-    TARGET_DAILY_TRADES = 3   # minimum learning trades per day
-    MAX_DAILY_TRADES = 6      # don't overdo it
+    TARGET_DAILY_TRADES = 20  # aspirational daily learning volume
+    MAX_DAILY_TRADES = 999    # no upper limit — more trades = faster learning
 
     def __init__(self) -> None:
         self.journal = TradingJournal()
@@ -56,13 +54,15 @@ class AlwaysOnTrader:
         """Place forced trades until today's count reaches the daily target.
         Up to 3 per call. Market hours → live forced; otherwise → historical sim."""
         placed_today = self._count_todays_forced_trades()
-        needed = self.TARGET_DAILY_TRADES - placed_today
-        if needed <= 0:
+        if placed_today >= self.MAX_DAILY_TRADES:
             return []
+        # Always place more — no upper limit in practice. Just cap per-call volume
+        # to avoid rate limits; this gets called every 15 min throughout the day.
+        needed = 5
 
         is_market_hours = self._is_market_hours(datetime.now(IST))
         trades: list[dict] = []
-        for _ in range(min(needed, 3)):
+        for _ in range(needed):
             trade = (self._place_live_forced_trade() if is_market_hours
                      else self._place_historical_simulation_trade())
             if not trade:
@@ -77,7 +77,7 @@ class AlwaysOnTrader:
         return trades
 
     def close_open_forced_trades(self) -> list[dict]:
-        """Close forced trades opened 45+ min ago, or any still open at/after 15:20 IST."""
+        """Close forced trades opened 15+ min ago, or any still open at/after 15:20 IST."""
         open_trades = self._load_open_forced_trades()
         if not open_trades:
             return []
@@ -91,7 +91,7 @@ class AlwaysOnTrader:
                 elapsed_min = (now - opened_at).total_seconds() / 60
             except Exception:
                 elapsed_min = 999
-            if elapsed_min >= 45 or now >= market_closing:
+            if elapsed_min >= 15 or now >= market_closing:
                 result = self._close_forced_trade(trade)
                 if result:
                     closed.append(result)
@@ -109,7 +109,7 @@ class AlwaysOnTrader:
 
     def get_todays_summary(self) -> dict:
         history = self._load_history()
-        today = date.today().isoformat()
+        today = datetime.now(IST).date().isoformat()
         todays = [t for t in history if t.get("opened_at", "")[:10] == today]
         wins = sum(1 for t in todays if t.get("outcome") == "WIN")
         total = len(todays)
@@ -343,7 +343,7 @@ class AlwaysOnTrader:
         return now.weekday() < 5 and 9 * 60 + 15 <= total <= 15 * 60 + 30
 
     def _count_todays_forced_trades(self) -> int:
-        today = date.today().isoformat()
+        today = datetime.now(IST).date().isoformat()
         opens = sum(1 for t in self._load_open_forced_trades()
                     if t.get("opened_at", "")[:10] == today)
         closed = sum(1 for t in self._load_history()

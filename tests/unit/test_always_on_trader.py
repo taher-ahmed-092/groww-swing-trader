@@ -31,19 +31,33 @@ def test_places_trades_when_below_target(tmp_path, monkeypatch):
                                  "opened_at": _today_iso(), "entry": 100.0,
                                  "stop": 95.0, "target": 110.0, "signal_score": 0.4})
     trades = trader.ensure_daily_trades()
-    assert len(trades) == 3
+    assert len(trades) == 5
 
 
-def test_stops_when_target_reached(tmp_path, monkeypatch):
+def test_stops_when_max_reached(tmp_path, monkeypatch):
     _tmp_files(tmp_path, monkeypatch)
     trader = AlwaysOnTrader()
-    # 3 forced trades already logged today → nothing more needed.
-    (tmp_path / "hist.json").write_text(
-        '[{"opened_at": "%s", "outcome": "WIN"},'
-        ' {"opened_at": "%s", "outcome": "LOSS"},'
-        ' {"opened_at": "%s", "outcome": "WIN"}]'
-        % (_today_iso(), _today_iso(), _today_iso()))
+    # MAX_DAILY_TRADES already logged today → nothing more needed, no upper-bound spam.
+    rows = ",".join('{"opened_at": "%s", "outcome": "WIN"}' % _today_iso()
+                    for _ in range(trader.MAX_DAILY_TRADES))
+    (tmp_path / "hist.json").write_text(f"[{rows}]")
     assert trader.ensure_daily_trades() == []
+
+
+def test_keeps_placing_past_old_target(tmp_path, monkeypatch):
+    _tmp_files(tmp_path, monkeypatch)
+    trader = AlwaysOnTrader()
+    monkeypatch.setattr(trader, "_is_market_hours", lambda now: True)
+    monkeypatch.setattr(trader, "_place_live_forced_trade",
+                        lambda: {"symbol": "TEST", "outcome": "OPEN",
+                                 "opened_at": _today_iso(), "entry": 100.0,
+                                 "stop": 95.0, "target": 110.0, "signal_score": 0.4})
+    # 3 already logged (the old TARGET_DAILY_TRADES) — the new unlimited engine
+    # must keep placing more, not stop at 3.
+    rows = ",".join('{"opened_at": "%s", "outcome": "WIN"}' % _today_iso() for _ in range(3))
+    (tmp_path / "hist.json").write_text(f"[{rows}]")
+    trades = trader.ensure_daily_trades()
+    assert len(trades) == 5
 
 
 def test_stop_loss_always_set():

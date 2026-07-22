@@ -214,8 +214,12 @@ class ScreenerScraper:
         if roce is not None and roce < 10:
             rejects.append(f"Poor capital efficiency (ROCE {roce}%)")
 
+        # Piotroski is only meaningful once enough signals were actually evaluable —
+        # a plain yfinance .info dict lacks prior-year fields for 6 of 9 signals, so
+        # a low score from too few evaluated signals means "no data", not "bad company".
         piotroski = data.get("piotroski_score")
-        if piotroski is not None and piotroski <= 2:
+        piotroski_evaluated = data.get("piotroski_signals_evaluated", 0) or 0
+        if piotroski is not None and piotroski_evaluated >= 5 and piotroski <= 2:
             rejects.append(f"Extremely weak financials (Piotroski F={piotroski}/9)")
 
         return rejects

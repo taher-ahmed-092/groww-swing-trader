@@ -470,10 +470,9 @@ function updateLearningPanel(d){
   const total=(d.summary&&d.summary.total_trades)||0,simTotal=sim.total||0;
   document.getElementById('sim-total').textContent=simTotal;
   document.getElementById('sim-wr').textContent=(sim.win_rate||0).toFixed(1)+'%';
-  const points=total+Math.round(simTotal*0.3);
-  const progress=Math.min(100,(points/30)*100);
+  const progress=d.learning_metrics?.xgboost_progress||0;
   document.getElementById('xgb-progress').style.width=progress.toFixed(0)+'%';
-  document.getElementById('xgb-label').textContent=progress>=100?'🤖 ACTIVE':`${points} / 30 data points`;
+  document.getElementById('xgb-label').textContent=progress>=100?'🤖 ACTIVE':`${progress.toFixed(0)}% trained`;
   const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
   const h=ist.getHours(),m=ist.getMinutes(),day=ist.getDay();
   const open=day>=1&&day<=5&&(h>9||(h===9&&m>=30))&&(h<15||(h===15&&m<=15));
