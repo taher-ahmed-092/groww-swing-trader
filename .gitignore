@@ -35,3 +35,4 @@ Thumbs.db
 
 # Local tooling / IDE state
 .claude/
+.code_analyzer/
