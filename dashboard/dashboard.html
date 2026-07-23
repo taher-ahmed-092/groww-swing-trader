@@ -5,469 +5,456 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Cosmic Punk — Trading Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.min.js"></script>
 <style>
 :root{
-  --bg:#040404;--surface:rgba(255,255,255,0.03);--surface2:rgba(255,255,255,0.06);
-  --gold:#c9a84c;--gold-light:#f5d78e;--cyan:#00d4ff;--green:#10b981;--red:#ef4444;
-  --text:#e8e4dc;--muted:#6b6560;--border:rgba(201,168,76,0.15);
-  --font-hero:'Cinzel',serif;--font-body:'Cormorant Garamond',serif;
-  --font-data:'Space Grotesk',sans-serif;--font-mono:'Courier New',monospace;
+  --sky-top:#2b1055;--sky-mid:#7b2ff7;--sky-bottom:#ff6ec7;--sun:#ffd93d;
+  --panel-bg:rgba(20,10,40,0.55);--panel-border:rgba(255,255,255,0.12);
+  --cyan:#4dd8ff;--green:#3ddc97;--red:#ff5c7a;--gold:#ffd93d;
+  --text:#fdf6ff;--text-muted:#c9b8e0;
+  --font-display:'Baloo 2',sans-serif;--font-body:'Space Grotesk',sans-serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:var(--font-body);overflow-x:hidden}
-@media(hover:hover){body{cursor:none}}
+body{
+  background:linear-gradient(180deg,var(--sky-top) 0%,var(--sky-mid) 50%,var(--sky-bottom) 100%);
+  color:var(--text);font-family:var(--font-body);overflow-x:hidden;min-height:100vh}
 
-/* preloader */
-.preloader{position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;
-  align-items:center;justify-content:center;transition:opacity .8s ease}
-.preloader.done{opacity:0;pointer-events:none}
-.preloader__inner{text-align:center}
-.preloader__kicker{font-family:var(--font-data);font-size:11px;letter-spacing:3px;
-  color:var(--muted);margin-bottom:24px}
-.preloader__count{font-family:var(--font-hero);font-size:clamp(80px,15vw,180px);
-  color:var(--gold);line-height:1}
-.preloader__bar{width:200px;height:1px;background:var(--border);margin:24px auto;overflow:hidden}
-.preloader__bar span{display:block;height:100%;background:var(--gold);width:0%;transition:width .1s linear}
-.preloader__sub{font-family:var(--font-data);font-size:10px;letter-spacing:4px;color:var(--muted)}
+#sky-bg{position:fixed;inset:0;z-index:0;width:100vw;height:100vh}
+#flight-layer{position:fixed;inset:0;z-index:500;pointer-events:none;overflow:hidden}
+.warp-flash{position:fixed;inset:0;z-index:400;
+  background:radial-gradient(circle,rgba(255,255,255,0.8),transparent 60%);
+  pointer-events:none;opacity:0}
+.warp-flash.active{animation:warpFlash .5s ease}
+@keyframes warpFlash{0%{opacity:0}30%{opacity:.5}100%{opacity:0}}
 
-/* webgl stage */
-#stage{position:fixed;inset:0;z-index:0;pointer-events:none}
+.tilt-btn{position:fixed;bottom:20px;left:20px;z-index:50;background:var(--panel-bg);
+  backdrop-filter:blur(10px);border:1px solid var(--panel-border);border-radius:999px;
+  padding:10px 18px;color:var(--text);font-family:var(--font-display);font-size:13px;
+  cursor:pointer;font-weight:700}
+.tilt-btn.hidden{display:none}
 
-/* grain + vignette */
-.grain{position:fixed;inset:-50%;z-index:1;pointer-events:none;width:200%;height:200%;
-  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E");
-  animation:grainMove .5s steps(1) infinite;opacity:.4}
-@keyframes grainMove{0%{transform:translate(0,0)}25%{transform:translate(-3%,-3%)}
-  50%{transform:translate(3%,3%)}75%{transform:translate(-3%,3%)}100%{transform:translate(3%,-3%)}}
-.vignette{position:fixed;inset:0;z-index:1;pointer-events:none;
-  background:radial-gradient(ellipse at center,transparent 40%,rgba(0,0,0,.7) 100%)}
+#killswitch-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:600;
+  background:var(--red);color:#fff;text-align:center;padding:10px;font-weight:700;
+  font-family:var(--font-display)}
 
-/* cursor */
-.cursor{position:fixed;z-index:9998;pointer-events:none;mix-blend-mode:difference}
-.cursor__dot{width:6px;height:6px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);
-  position:fixed;transition:transform .1s ease}
-.cursor__ring{position:fixed;width:32px;height:32px;border:1px solid rgba(255,255,255,.4);
-  border-radius:50%;transform:translate(-50%,-50%)}
-@media(max-width:768px){.cursor{display:none}}
+header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
+  align-items:center;justify-content:space-between;padding:12px 20px;
+  background:rgba(20,10,40,0.5);backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--panel-border)}
+.site-head__mark{font-family:var(--font-display);font-size:16px;font-weight:800;color:var(--gold)}
+.site-head__clock{font-family:var(--font-mono);font-size:12px;color:var(--text-muted)}
+.site-head__market{display:flex;align-items:center;gap:8px;font-family:var(--font-display);
+  font-size:12px;font-weight:700}
+.market-dot{width:8px;height:8px;border-radius:50%}
+.market-dot.open{background:var(--green);animation:pulse 1.5s ease-in-out infinite;box-shadow:0 0 8px var(--green)}
+.market-dot.closed{background:var(--text-muted)}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}
 
-/* header + ticker */
-.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;
-  justify-content:space-between;padding:16px 32px;border-bottom:1px solid var(--border);
-  background:rgba(4,4,4,.8);backdrop-filter:blur(20px)}
-.site-head__mark{font-family:var(--font-hero);font-size:14px;letter-spacing:2px;color:var(--gold)}
-.site-head__mark em{font-family:var(--font-body);font-style:italic;color:var(--text)}
-.site-head__clock{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
-.site-head__market{display:flex;align-items:center;gap:8px;font-family:var(--font-data);
-  font-size:11px;letter-spacing:2px}
-.market-dot{width:6px;height:6px;border-radius:50%}
-.market-dot.open{background:var(--green);animation:pulse 1.5s ease-in-out infinite;box-shadow:0 0 6px var(--green)}
-.market-dot.closed{background:var(--muted)}
-@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
-.ticker-wrap{position:fixed;top:57px;left:0;right:0;z-index:99;overflow:hidden;
-  background:rgba(4,4,4,.6);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);padding:5px 0}
-.ticker{display:inline-flex;gap:48px;animation:tickerScroll 60s linear infinite;white-space:nowrap;
-  font-family:var(--font-mono);font-size:11px;color:var(--gold);letter-spacing:1px}
-@keyframes tickerScroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
+.room{position:relative;z-index:2;min-height:100vh;padding:90px 20px 40px;
+  max-width:1200px;margin:0 auto;display:flex;flex-direction:column;justify-content:center}
+@media(max-width:768px){.room{padding:80px 14px 30px}}
 
-/* rail */
-.rail{position:fixed;left:24px;top:50%;transform:translateY(-50%);z-index:100;
-  display:flex;flex-direction:column;gap:16px}
-.rail__dot{display:flex;align-items:center;gap:10px;text-decoration:none}
-.rail__dot span{display:flex;align-items:center;justify-content:center;width:24px;height:24px;
-  border:1px solid var(--border);border-radius:50%;font-family:var(--font-hero);font-size:8px;
-  color:var(--muted);transition:all .3s ease}
-.rail__dot i{font-style:normal;font-family:var(--font-data);font-size:9px;letter-spacing:1px;
-  color:var(--muted);opacity:0;transform:translateX(-4px);transition:all .3s ease;white-space:nowrap}
-.rail__dot:hover i,.rail__dot.active i{opacity:1;transform:translateX(0)}
-.rail__dot.active span{border-color:var(--gold);color:var(--gold);box-shadow:0 0 10px rgba(201,168,76,.3)}
-@media(max-width:900px){.rail{display:none}}
+.room__title{font-family:var(--font-display);font-size:clamp(26px,4vw,44px);font-weight:800;
+  margin-bottom:6px;text-shadow:0 2px 12px rgba(0,0,0,.4)}
+.room__sub{font-family:var(--font-body);font-size:15px;color:var(--text-muted);margin-bottom:24px}
 
-/* chapters */
-.chapter{position:relative;z-index:2;min-height:100vh;padding:120px 80px 80px;
-  max-width:1100px;margin:0 auto}
-@media(max-width:768px){.chapter{padding:100px 24px 60px}.site-head{padding:12px 20px}}
-.mask{overflow:hidden;display:block}
-.line{display:block}
-.reveal{opacity:0}
+.panel{background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid var(--panel-border);
+  border-radius:20px;padding:20px}
 
-/* hero */
-.hero{text-align:center;padding-top:80px}
-.kicker{font-family:var(--font-data);font-size:11px;letter-spacing:4px;color:var(--muted);margin-bottom:32px}
-.hero__title{font-family:var(--font-hero);font-size:clamp(40px,8vw,110px);font-weight:900;
-  line-height:1;letter-spacing:-2px;margin-bottom:48px}
-.hero__name{color:var(--gold);font-style:normal}
-.line--italic{font-family:var(--font-body);font-style:italic;font-weight:300;
-  font-size:clamp(28px,5vw,70px);color:var(--muted)}
-.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:64px;border:1px solid var(--border)}
-@media(max-width:768px){.metrics{grid-template-columns:repeat(2,1fr)}}
-.metric{padding:32px 24px;text-align:center;border-right:1px solid var(--border);background:var(--surface)}
-.metric:last-child{border-right:none}
-.metric__num{font-family:var(--font-hero);font-size:clamp(28px,4vw,52px);color:var(--text);margin-bottom:8px}
-.metric__num--gold{color:var(--gold)}
-.metric__label{font-family:var(--font-data);font-size:9px;letter-spacing:3px;color:var(--muted)}
-.scroll-cue{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:80px;
-  font-family:var(--font-data);font-size:9px;letter-spacing:4px;color:var(--muted)}
-.scroll-cue__line{width:1px;height:60px;background:linear-gradient(var(--gold),transparent);
-  animation:scrollCuePulse 2s ease-in-out infinite}
-@keyframes scrollCuePulse{0%,100%{opacity:.4}50%{opacity:1}}
+/* ── Room 1: Mission Control ── */
+.hud-strip{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-bottom:20px}
+.hud-strip .regime-emoji{font-size:36px}
+.hud-strip .regime-name{font-family:var(--font-display);font-weight:800;font-size:20px;color:var(--gold)}
+.hud-strip .hud-metric{font-family:var(--font-mono);font-size:13px;color:var(--text)}
+.hud-strip .funny-line{font-family:var(--font-display);font-size:14px;color:var(--text-muted);
+  font-weight:500;flex-basis:100%}
 
-.chapter__head{margin-bottom:64px}
-.chapter__title{font-family:var(--font-hero);font-size:clamp(32px,5vw,68px);font-weight:700;margin:8px 0 24px}
-.lede{font-family:var(--font-body);font-size:clamp(16px,2vw,22px);color:var(--muted);
-  font-style:italic;max-width:600px}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+@media(max-width:768px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+.stat-tile{background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid var(--panel-border);
+  border-radius:16px;padding:16px;text-align:center}
+.stat-tile__num{font-family:var(--font-display);font-size:clamp(22px,3vw,32px);font-weight:800;color:var(--gold)}
+.stat-tile__label{font-family:var(--font-body);font-size:10px;letter-spacing:1px;
+  color:var(--text-muted);text-transform:uppercase;margin-top:4px;font-weight:600}
 
-/* intelligence */
-.intelligence{display:grid;grid-template-columns:1fr 200px;gap:32px;align-items:start}
-@media(max-width:700px){.intelligence{grid-template-columns:1fr}}
-.regime-emoji{font-size:56px;margin-bottom:8px}
-.regime-name{font-family:var(--font-hero);font-size:clamp(28px,4vw,58px);color:var(--gold);letter-spacing:2px}
-.rsi-gauge{grid-column:2;width:160px}
-@media(max-width:700px){.rsi-gauge{grid-column:1;margin:0 auto}}
-.strategy-rec{font-size:19px;color:var(--muted);max-width:500px;margin-top:16px}
-.nifty-price{display:flex;align-items:baseline;gap:16px;margin-top:20px}
-.nifty-label{font-family:var(--font-data);font-size:10px;letter-spacing:3px;color:var(--muted)}
-.nifty-num{font-family:var(--font-hero);font-size:clamp(24px,3vw,44px);color:var(--text)}
+.flight-log{margin-top:8px}
+.flight-log__title{font-family:var(--font-display);font-weight:700;font-size:14px;margin-bottom:8px;color:var(--cyan)}
+.flight-log__item{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);
+  padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.flight-log__item.win{color:var(--green)}.flight-log__item.loss{color:var(--red)}
 
-/* positions */
-.positions{display:flex;flex-direction:column;gap:1px}
-.position-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);
-  padding:22px 28px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;margin-bottom:1px}
-.position-card__symbol{font-family:var(--font-hero);font-size:22px;color:var(--text)}
-.position-card__meta{font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:4px}
-.position-card__pnl{font-family:var(--font-hero);font-size:28px;text-align:right}
+/* ── Room 2: Hangar ── */
+.positions-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.position-card{background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid var(--panel-border);
+  border-radius:16px;padding:16px;border-left:4px solid var(--gold)}
+.position-card__symbol{font-family:var(--font-display);font-weight:800;font-size:18px}
+.position-card__meta{font-family:var(--font-mono);font-size:11px;color:var(--text-muted);margin-top:4px}
+.position-card__pnl{font-family:var(--font-display);font-weight:800;font-size:24px;margin-top:8px}
 .position-card__pnl.up{color:var(--green)}.position-card__pnl.down{color:var(--red)}
-.position-card__progress{grid-column:1/-1;height:2px;background:var(--border);overflow:hidden}
+.position-card__progress{height:6px;background:rgba(255,255,255,.1);border-radius:6px;overflow:hidden;margin-top:8px}
 .position-card__progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),var(--gold));transition:width 1s ease}
-.empty-state{font-family:var(--font-body);font-style:italic;color:var(--muted);font-size:20px;
-  text-align:center;padding:80px 0}
+.empty-hangar{text-align:center;padding:40px 20px}
+.empty-hangar__anim{font-size:48px;display:inline-block;animation:circleRunway 3s linear infinite}
+@keyframes circleRunway{from{transform:rotate(0deg) translateX(20px) rotate(0deg)}
+  to{transform:rotate(360deg) translateX(20px) rotate(-360deg)}}
+.empty-hangar__text{font-family:var(--font-display);font-weight:700;font-size:18px;
+  color:var(--text-muted);margin-top:12px}
 
-/* record */
-.chart-wrap{background:var(--surface);border:1px solid var(--border);padding:28px}
-.wl-pattern{margin-top:24px;display:flex;gap:6px;flex-wrap:wrap}
-.wl-circle{width:12px;height:12px;border-radius:50%}
-.wl-circle.win{background:var(--gold)}.wl-circle.loss{background:var(--red)}
+/* ── Room 3: Flight Log & Memory ── */
+.room3-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.room3-grid{grid-template-columns:1fr}}
+.wl-pattern{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.wl-circle{width:14px;height:14px;border-radius:50%}
+.wl-circle.win{background:var(--green)}.wl-circle.loss{background:var(--red)}
+.knowledge-entry{display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid rgba(255,255,255,.06);font-family:var(--font-body);font-size:13px;font-weight:600}
+.knowledge-entry__conf{font-family:var(--font-mono);font-weight:700;font-size:12px;padding:2px 8px;
+  border-radius:8px;background:rgba(255,255,255,.1);color:var(--gold);min-width:44px;text-align:center}
+.knowledge-entry__desc{flex:1;color:var(--text)}
+.knowledge-entry__count{font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
 
-/* knowledge */
-#kb-constellation{width:100%;height:200px;margin-bottom:28px}
-.knowledge-entry{display:flex;align-items:center;gap:14px;padding:12px 0;
-  border-bottom:1px solid rgba(255,255,255,.04);font-family:var(--font-mono);font-size:12px}
-.knowledge-entry__conf{color:var(--gold);min-width:36px;font-size:10px}
-.knowledge-entry__desc{color:var(--muted);flex:1}
-.knowledge-entry.win .knowledge-entry__desc{color:var(--text)}
-.knowledge-entry__count{color:var(--muted);font-size:10px;white-space:nowrap}
-
-/* engine */
-.engine-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-bottom:56px;border:1px solid var(--border)}
-@media(max-width:600px){.engine-stats{grid-template-columns:1fr}}
-.estat{padding:36px 28px;text-align:center;border-right:1px solid var(--border);background:var(--surface)}
-.estat:last-child{border-right:none}
-.estat__num{font-family:var(--font-hero);font-size:clamp(36px,5vw,58px);color:var(--gold);margin-bottom:8px}
-.estat__label{font-family:var(--font-data);font-size:9px;letter-spacing:3px;color:var(--muted);margin-bottom:4px}
-.estat__sub{font-family:var(--font-body);font-style:italic;font-size:13px;color:var(--muted)}
-.xgb-section{max-width:600px}
-.xgb-label{display:flex;justify-content:space-between;font-family:var(--font-data);font-size:10px;
-  letter-spacing:2px;color:var(--muted);margin-bottom:12px}
-.xgb-track{height:2px;background:var(--border);overflow:hidden;margin-bottom:12px}
-.xgb-fill{height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,var(--gold));
+/* ── Room 4: Engine Room ── */
+.engine-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+@media(max-width:700px){.engine-grid{grid-template-columns:1fr}}
+.xgb-track{height:10px;background:rgba(255,255,255,.1);border-radius:6px;overflow:hidden;margin:10px 0}
+.xgb-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--cyan),var(--gold));
   transition:width 1.5s cubic-bezier(.4,0,.2,1)}
-.xgb-sub{font-family:var(--font-body);font-style:italic;font-size:13px;color:var(--muted)}
+.thresholds-mini{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:16px}
+.threshold-chip{background:rgba(255,255,255,.06);border-radius:12px;padding:12px;
+  border:1px solid var(--panel-border)}
+.threshold-chip.active-regime{border-color:var(--gold)}
+.threshold-chip__regime{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);letter-spacing:1px}
+.threshold-chip__value{font-family:var(--font-display);font-weight:800;font-size:22px;color:var(--gold)}
+.threshold-chip__sub{font-family:var(--font-body);font-size:11px;color:var(--text-muted);margin-top:2px}
 
-/* thresholds */
-.thresholds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1px;
-  border:1px solid var(--border)}
-.threshold-card{padding:22px 24px;background:var(--surface);border-right:1px solid var(--border)}
-.threshold-card__regime{font-family:var(--font-data);font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:8px}
-.threshold-card__value{font-family:var(--font-hero);font-size:32px;color:var(--gold)}
-.threshold-card__sub{font-family:var(--font-body);font-style:italic;font-size:12px;color:var(--muted);margin-top:4px}
-.threshold-card.active-regime{border-top:2px solid var(--gold)}
+.system-status{display:flex;gap:20px;flex-wrap:wrap;align-items:center;font-family:var(--font-mono);
+  font-size:12px;color:var(--text-muted);margin-top:20px;padding-top:16px;border-top:1px solid var(--panel-border)}
+.system-status b{color:var(--text);font-weight:700}
+.system-status a{color:var(--cyan);text-decoration:none}
 
-/* trade popup */
-.trade-popup{position:fixed;bottom:32px;right:32px;z-index:1000;background:rgba(4,4,4,.95);
-  border:1px solid rgba(201,168,76,.3);border-left:3px solid var(--gold);padding:18px 22px;
-  min-width:210px;backdrop-filter:blur(20px);transform:translateX(calc(100% + 40px));
-  transition:transform .6s cubic-bezier(0.34,1.56,0.64,1);font-family:var(--font-mono)}
-.trade-popup.visible{transform:translateX(0)}
-.trade-popup.win-trade{border-left-color:var(--green)}
-.trade-popup.loss-trade{border-left-color:var(--red)}
-.trade-popup.open-trade{border-left-color:var(--cyan)}
-.trade-popup__kicker{font-size:9px;letter-spacing:3px;color:var(--muted);margin-bottom:6px}
-.trade-popup__symbol{font-family:var(--font-hero);font-size:22px;color:var(--text);margin-bottom:6px}
-.trade-popup__details{font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.6}
-.trade-popup__pnl{font-family:var(--font-hero);font-size:18px}
-.trade-popup__pnl.win{color:var(--green)}.trade-popup__pnl.loss{color:var(--red)}
-
-/* status footer */
-.system-status{position:relative;z-index:2;border-top:1px solid var(--border);padding:20px 80px;
-  display:flex;gap:36px;align-items:center;background:rgba(4,4,4,.8);flex-wrap:wrap}
-@media(max-width:768px){.system-status{padding:16px 24px}}
-.sys-label{font-family:var(--font-data);font-size:9px;letter-spacing:2px;color:var(--muted);
-  display:block;margin-bottom:2px}
-.sys-val{font-family:var(--font-mono);font-size:12px;color:var(--text)}
-.sys-link{text-decoration:none;color:var(--gold)}
-#killswitch-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:200;
-  background:var(--red);color:#fff;text-align:center;padding:10px;font-weight:600;letter-spacing:.5px}
+/* ── Flight animation elements ── */
+.trade-plane{position:absolute;font-size:40px;filter:drop-shadow(0 4px 12px rgba(0,0,0,.4));will-change:transform}
+.trade-plane__banner{position:absolute;top:50%;left:100%;transform:translateY(-50%);
+  background:var(--panel-bg);backdrop-filter:blur(10px);border:2px solid var(--gold);
+  border-radius:12px;padding:6px 14px;white-space:nowrap;font-family:var(--font-display);
+  font-weight:700;font-size:14px;color:var(--text);margin-left:8px}
+.trade-plane__banner.win{border-color:var(--green)}
+.trade-plane__banner.loss{border-color:var(--red)}
+.parachute{position:absolute;font-size:24px;animation:parachutePop .4s ease forwards}
+@keyframes parachutePop{0%{transform:scale(0) translateY(-10px);opacity:0}
+  60%{transform:scale(1.2) translateY(0);opacity:1}100%{transform:scale(1) translateY(0);opacity:1}}
 </style>
 </head>
 <body>
-<div class="preloader" id="preloader">
-  <div class="preloader__inner">
-    <div class="preloader__kicker">SYSTEM INITIALISING</div>
-    <div class="preloader__count" id="preCount">00</div>
-    <div class="preloader__bar"><span id="preBar"></span></div>
-    <div class="preloader__sub">COSMIC PUNK TRADING SYSTEM</div>
-  </div>
-</div>
-
-<canvas id="stage"></canvas>
-<div class="grain" aria-hidden="true"></div>
-<div class="vignette" aria-hidden="true"></div>
-<div class="cursor"><div class="cursor__dot"></div><div class="cursor__ring"></div></div>
-
+<canvas id="sky-bg"></canvas>
+<div id="flight-layer"></div>
+<div class="warp-flash" id="warp-flash"></div>
 <div id="killswitch-banner">🚨 KILL SWITCH ACTIVE — all trading halted</div>
-
-<div class="trade-popup" id="trade-popup">
-  <div class="trade-popup__kicker" id="popup-kicker"></div>
-  <div class="trade-popup__symbol" id="popup-symbol"></div>
-  <div class="trade-popup__details" id="popup-details"></div>
-  <div class="trade-popup__pnl" id="popup-pnl"></div>
-</div>
-
-<nav class="rail">
-  <a href="#chapter-0" class="rail__dot active" data-chapter="0"><span>◆</span><i>Overview</i></a>
-  <a href="#chapter-1" class="rail__dot" data-chapter="1"><span>I</span><i>Intelligence</i></a>
-  <a href="#chapter-2" class="rail__dot" data-chapter="2"><span>II</span><i>Battlefield</i></a>
-  <a href="#chapter-3" class="rail__dot" data-chapter="3"><span>III</span><i>The Record</i></a>
-  <a href="#chapter-4" class="rail__dot" data-chapter="4"><span>IV</span><i>The Mind</i></a>
-  <a href="#chapter-5" class="rail__dot" data-chapter="5"><span>V</span><i>The Engine</i></a>
-  <a href="#chapter-6" class="rail__dot" data-chapter="6"><span>VI</span><i>The Threshold</i></a>
-</nav>
+<button id="enable-tilt" class="tilt-btn">🎮 Enable Tilt</button>
 
 <header class="site-head">
-  <div class="site-head__mark">COSMIC PUNK <em>Trading</em></div>
-  <div class="site-head__clock" id="live-clock"></div>
-  <div class="site-head__market" id="market-status">
+  <div class="site-head__mark">🚀 COSMIC PUNK</div>
+  <div class="site-head__clock" id="live-clock">—</div>
+  <div class="site-head__market">
     <span class="market-dot" id="market-dot"></span><span id="market-text">NSE</span>
   </div>
 </header>
-<div class="ticker-wrap"><div class="ticker" id="price-ticker">◆ COSMIC PUNK TRADING SYSTEM ◆</div></div>
 
-<section class="chapter" id="chapter-0" data-ch="0">
-  <div class="hero">
-    <p class="kicker reveal-kicker">PAPER TRADING · AI-POWERED · NSE/BSE</p>
-    <h1 class="hero__title">
-      <span class="mask"><span class="line" id="hero-greeting">WELCOME BACK,</span></span>
-      <span class="mask"><span class="line hero__name" id="hero-name">__OWNER_NAME__</span></span>
-      <span class="mask"><span class="line line--italic" id="hero-regime">Loading...</span></span>
-    </h1>
-    <div class="metrics">
-      <div class="metric reveal-metric"><div class="metric__num" id="metric-trades">0</div><div class="metric__label">TOTAL TRADES</div></div>
-      <div class="metric reveal-metric"><div class="metric__num" id="metric-wr">0%</div><div class="metric__label">WIN RATE</div></div>
-      <div class="metric reveal-metric"><div class="metric__num" id="metric-kb">0</div><div class="metric__label">PATTERNS LEARNED</div></div>
-      <div class="metric reveal-metric"><div class="metric__num metric__num--gold" id="metric-pnl">₹0</div><div class="metric__label">TOTAL P&amp;L</div></div>
-    </div>
-    <div class="scroll-cue"><span class="scroll-cue__line"></span>SCROLL TO EXPLORE</div>
+<!-- ROOM 1 — MISSION CONTROL -->
+<section class="room" id="room-1">
+  <div class="room__title">Welcome back, <span id="owner">__OWNER_NAME__</span>! 👋</div>
+  <div class="room__sub">Mission Control · your AI trading system, live</div>
+
+  <div class="panel hud-strip">
+    <span class="regime-emoji" id="regime-emoji">🚀</span>
+    <span class="regime-name" id="regime-name">—</span>
+    <span class="hud-metric" id="nifty-price">NIFTY —</span>
+    <span class="hud-metric" id="rsi-value">RSI —</span>
+    <span class="funny-line" id="funny-line">Reading the market's mood...</span>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-trades">0</div><div class="stat-tile__label">Total Trades</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-wr">0%</div><div class="stat-tile__label">Win Rate</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-pnl">₹0</div><div class="stat-tile__label">Total P&amp;L</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-kb">0</div><div class="stat-tile__label">Patterns Learned</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-forced">0</div><div class="stat-tile__label">Forced Trades Today</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-simwr">0%</div><div class="stat-tile__label">Sim Win Rate</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-xgb">0%</div><div class="stat-tile__label">XGBoost Progress</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-replay">0</div><div class="stat-tile__label">Replay Patterns</div></div>
+  </div>
+
+  <div class="panel flight-log">
+    <div class="flight-log__title">📡 Flight Log</div>
+    <div id="flight-log-list"><div class="flight-log__item">Waiting for the first trade...</div></div>
   </div>
 </section>
 
-<section class="chapter" id="chapter-1" data-ch="1">
-  <div class="chapter__head">
-    <p class="kicker reveal">CHAPTER I</p>
-    <h2 class="chapter__title reveal">The Intelligence</h2>
-    <p class="lede reveal"><em>Every market has a mood. The system reads it before acting.</em></p>
-  </div>
-  <div class="intelligence">
-    <div>
-      <div class="regime-emoji reveal" id="regime-emoji">◆</div>
-      <div class="regime-name reveal" id="regime-name">—</div>
-      <p class="strategy-rec reveal" id="strategy-rec"><em>Loading market intelligence...</em></p>
-      <div class="nifty-price reveal">
-        <span class="nifty-label">NIFTY 50</span><span class="nifty-num" id="nifty-price">₹--</span>
+<!-- ROOM 2 — THE HANGAR -->
+<section class="room" id="room-2">
+  <div class="room__title">🛬 The Hangar</div>
+  <div class="room__sub">Open positions — capital deployed, stop-loss armed</div>
+  <div class="panel" id="positions-panel">
+    <div class="positions-grid" id="positions-container">
+      <div class="empty-hangar">
+        <div class="empty-hangar__anim">🛩️</div>
+        <div class="empty-hangar__text">Scanning the skies for opportunities... 🔭</div>
       </div>
     </div>
-    <svg class="rsi-gauge reveal" viewBox="0 0 120 120">
-      <circle cx="60" cy="60" r="54" fill="none" stroke="#1a1a1a" stroke-width="6"
-        stroke-dasharray="339.3" transform="rotate(-90 60 60)"/>
-      <circle id="rsi-arc" cx="60" cy="60" r="54" fill="none" stroke="#c9a84c" stroke-width="6"
-        stroke-linecap="round" stroke-dasharray="339.3" stroke-dashoffset="339.3"
-        transform="rotate(-90 60 60)" style="transition:stroke-dashoffset 1.5s ease,stroke .8s ease"/>
-      <text x="60" y="55" text-anchor="middle" fill="#e8e4dc" font-family="Space Grotesk" font-size="11">RSI</text>
-      <text x="60" y="72" id="rsi-value" text-anchor="middle" fill="#c9a84c" font-family="Cinzel" font-size="18">--</text>
-    </svg>
   </div>
 </section>
 
-<section class="chapter" id="chapter-2" data-ch="2">
-  <div class="chapter__head">
-    <p class="kicker reveal">CHAPTER II</p>
-    <h2 class="chapter__title reveal">The Battlefield</h2>
-    <p class="lede reveal"><em>Capital deployed. Stop-loss armed. Target set. Every position tells a story.</em></p>
-  </div>
-  <div class="positions" id="positions-container">
-    <p class="empty-state"><em>The system is learning.<br/>Positions appear when signals clear all checks.</em></p>
+<!-- ROOM 3 — FLIGHT LOG & MEMORY -->
+<section class="room" id="room-3">
+  <div class="room__title">📡 Flight Log &amp; Memory</div>
+  <div class="room__sub">Every trade is a data point. Every pattern is a lesson.</div>
+  <div class="room3-grid">
+    <div class="panel">
+      <canvas id="pnl-chart" height="180"></canvas>
+      <div class="wl-pattern" id="wl-pattern"></div>
+    </div>
+    <div class="panel">
+      <canvas id="kb-constellation" style="width:100%;height:140px;margin-bottom:10px"></canvas>
+      <div id="knowledge-list"></div>
+    </div>
   </div>
 </section>
 
-<section class="chapter" id="chapter-3" data-ch="3">
-  <div class="chapter__head">
-    <p class="kicker reveal">CHAPTER III</p>
-    <h2 class="chapter__title reveal">The Record</h2>
-    <p class="lede reveal"><em>Every trade is a sentence. The chart is the book.</em></p>
-  </div>
-  <div class="chart-wrap reveal"><canvas id="pnl-chart" height="110"></canvas></div>
-  <div class="wl-pattern reveal" id="wl-pattern"></div>
-</section>
-
-<section class="chapter" id="chapter-4" data-ch="4">
-  <div class="chapter__head">
-    <p class="kicker reveal">CHAPTER IV</p>
-    <h2 class="chapter__title reveal">The Mind</h2>
-    <p class="lede reveal"><em>What the system has learned. What it will never forget.</em></p>
-  </div>
-  <canvas id="kb-constellation" class="reveal"></canvas>
-  <div class="knowledge-list" id="knowledge-list"></div>
-</section>
-
-<section class="chapter" id="chapter-5" data-ch="5">
-  <div class="chapter__head">
-    <p class="kicker reveal">CHAPTER V</p>
-    <h2 class="chapter__title reveal">The Engine</h2>
-    <p class="lede reveal"><em>244 stocks. Every regime. Learning never stops.</em></p>
-  </div>
-  <div class="engine-stats">
-    <div class="estat reveal"><div class="estat__num" id="forced-total">0</div><div class="estat__label">FORCED TRADES</div><div class="estat__sub" id="forced-wr">0% win rate</div></div>
-    <div class="estat reveal"><div class="estat__num" id="sim-total">0</div><div class="estat__label">SIMULATIONS</div><div class="estat__sub" id="sim-wr">0% win rate</div></div>
-    <div class="estat reveal"><div class="estat__num" id="replay-covered">0</div><div class="estat__label">REPLAY PATTERNS</div><div class="estat__sub">learned</div></div>
-  </div>
-  <div class="xgb-section reveal">
-    <div class="xgb-label"><span>XGBOOST SIGNAL MODEL</span><span id="xgb-label">0%</span></div>
+<!-- ROOM 4 — ENGINE ROOM -->
+<section class="room" id="room-4">
+  <div class="room__title">⚙️ Engine Room</div>
+  <div class="room__sub">24/7 learning — the system never stops training</div>
+  <div class="panel">
+    <div class="engine-grid">
+      <div class="stat-tile"><div class="stat-tile__num" id="forced-total">0</div><div class="stat-tile__label">Forced Trades</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="sim-total">0</div><div class="stat-tile__label">Simulations</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="replay-covered">0</div><div class="stat-tile__label">Replay Patterns</div></div>
+    </div>
+    <div class="xgb-label" style="display:flex;justify-content:space-between;font-family:var(--font-display);font-weight:700;font-size:13px">
+      <span>XGBoost Signal Model</span><span id="xgb-label-text">0%</span>
+    </div>
     <div class="xgb-track"><div class="xgb-fill" id="xgb-fill"></div></div>
-    <p class="xgb-sub" id="xgb-sub">Collecting training data...</p>
+    <div class="thresholds-mini" id="thresholds-grid"></div>
+    <div class="system-status">
+      <div>MODE <b id="sb-mode">—</b></div>
+      <div>UPTIME <b id="sb-uptime">—</b></div>
+      <div>NEXT JOB <b id="sb-next">—</b></div>
+      <div>UPDATED <b id="sb-updated">—</b></div>
+      <a href="https://github.com/taher-ahmed-092/groww-swing-trader" target="_blank">GitHub →</a>
+    </div>
   </div>
 </section>
-
-<section class="chapter" id="chapter-6" data-ch="6">
-  <div class="chapter__head">
-    <p class="kicker reveal">CHAPTER VI</p>
-    <h2 class="chapter__title reveal">The Threshold</h2>
-    <p class="lede reveal"><em>The system adjusts its own standards from evidence. It becomes harder to fool as it grows wiser.</em></p>
-  </div>
-  <div class="thresholds-grid" id="thresholds-grid">
-    <p class="empty-state"><em>Accumulating evidence... (15+ trades per regime needed)</em></p>
-  </div>
-</section>
-
-<footer class="system-status">
-  <div class="sys-item"><span class="sys-label">MODE</span><span class="sys-val" id="sb-mode">—</span></div>
-  <div class="sys-item"><span class="sys-label">UPTIME</span><span class="sys-val" id="sb-uptime">—</span></div>
-  <div class="sys-item"><span class="sys-label">NEXT JOB</span><span class="sys-val" id="sb-next">—</span></div>
-  <div class="sys-item"><span class="sys-label">KB PATTERNS</span><span class="sys-val" id="sb-kb">—</span></div>
-  <div class="sys-item"><span class="sys-label">UPDATED</span><span class="sys-val" id="sb-updated">—</span></div>
-  <a class="sys-item sys-link" href="https://github.com/taher-ahmed-092/groww-swing-trader" target="_blank">GitHub →</a>
-</footer>
 
 <script>
 const TOKEN="__DASHBOARD_TOKEN__";
 const OWNER="__OWNER_NAME__";
 
-// ── Preloader ──
-(function(){
-  const count=document.getElementById('preCount'),bar=document.getElementById('preBar'),
-    preloader=document.getElementById('preloader');
-  let n=0;
-  const interval=setInterval(()=>{
-    n=Math.min(n+Math.random()*4+1,100);
-    count.textContent=String(Math.floor(n)).padStart(2,'0');
-    bar.style.width=n+'%';
-    if(n>=100){
-      clearInterval(interval);count.textContent='100';bar.style.width='100%';
-      setTimeout(()=>{preloader.classList.add('done');setTimeout(()=>preloader.remove(),800);initAll();},400);
+// ── Sky background ──
+class SkyBackground{
+  constructor(canvas){
+    this.canvas=canvas;this.ctx=canvas.getContext('2d');
+    this.stars=this._makeStars(80);this.comets=this._makeComets(3);
+    this.decorPlanes=this._makeDecorPlanes(4);
+    this.tiltX=0;this.tiltY=0;
+    this._resize();
+    window.addEventListener('resize',()=>this._resize());
+    this._loop();
+  }
+  _resize(){this.canvas.width=innerWidth;this.canvas.height=innerHeight;}
+  _makeStars(n){return Array.from({length:n},()=>({
+    x:Math.random()*innerWidth,y:Math.random()*innerHeight,
+    r:Math.random()*1.8+0.4,speed:Math.random()*0.5+0.2,phase:Math.random()*Math.PI*2}));}
+  _makeComets(n){return Array.from({length:n},(_,i)=>({
+    x:-100,y:100+i*180,speed:1.2+Math.random()*0.8,len:60+Math.random()*40}));}
+  _makeDecorPlanes(n){return Array.from({length:n},(_,i)=>({
+    baseY:150+i*140,phase:i*1.5,speed:0.3+i*0.05}));}
+  _drawSun(){
+    const hour=+new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata',hour:'numeric',hour12:false});
+    const isDay=hour>=6&&hour<18;
+    const cx=innerWidth-100+this.tiltX*10,cy=100+this.tiltY*10,ctx=this.ctx;
+    ctx.save();
+    ctx.fillStyle=isDay?'#ffd93d':'#e8e8f0';
+    ctx.beginPath();ctx.arc(cx,cy,45,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#2b1055';
+    ctx.beginPath();ctx.arc(cx-15,cy-8,4,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.arc(cx+15,cy-8,4,0,Math.PI*2);ctx.fill();
+    ctx.lineWidth=3;ctx.strokeStyle='#2b1055';
+    ctx.beginPath();ctx.arc(cx,cy+5,18,0.15*Math.PI,0.85*Math.PI);ctx.stroke();
+    ctx.restore();
+  }
+  _drawPlanet(cx,cy,r,color,ringColor){
+    const ctx=this.ctx;ctx.save();ctx.globalAlpha=0.5;
+    ctx.strokeStyle=ringColor;ctx.lineWidth=6;
+    ctx.beginPath();ctx.ellipse(cx,cy,r*1.8,r*0.5,-0.3,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle=color;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+  _drawDecorPlane(p,t){
+    const ctx=this.ctx;
+    const x=(t*p.speed*40)%(innerWidth+100)-50,y=p.baseY+Math.sin(t*0.5+p.phase)*30;
+    ctx.save();ctx.globalAlpha=0.35;ctx.translate(x,y);
+    ctx.font='20px sans-serif';ctx.fillText('🛩️',0,0);ctx.restore();
+  }
+  _loop(){
+    const ctx=this.ctx;let t=0;
+    const frame=()=>{
+      t+=0.016;ctx.clearRect(0,0,innerWidth,innerHeight);
+      this.stars.forEach(s=>{
+        const a=0.3+0.5*Math.abs(Math.sin(t*s.speed+s.phase));
+        ctx.fillStyle=`rgba(255,255,255,${a})`;
+        ctx.beginPath();ctx.arc(s.x+this.tiltX*4,s.y+this.tiltY*4,s.r,0,Math.PI*2);ctx.fill();});
+      this._drawPlanet(120+this.tiltX*6,innerHeight-140+this.tiltY*6,36,'#ff6ec7','#ffd93d');
+      this._drawPlanet(innerWidth-180+this.tiltX*8,innerHeight-220+this.tiltY*8,26,'#4dd8ff','#7b2ff7');
+      this.comets.forEach(c=>{
+        c.x+=c.speed;if(c.x>innerWidth+100)c.x=-100;
+        const grad=ctx.createLinearGradient(c.x-c.len,c.y,c.x,c.y);
+        grad.addColorStop(0,'rgba(255,255,255,0)');grad.addColorStop(1,'rgba(255,255,255,0.8)');
+        ctx.strokeStyle=grad;ctx.lineWidth=2;
+        ctx.beginPath();ctx.moveTo(c.x-c.len,c.y);ctx.lineTo(c.x,c.y);ctx.stroke();});
+      this.decorPlanes.forEach(p=>this._drawDecorPlane(p,t));
+      this._drawSun();
+      requestAnimationFrame(frame);
+    };
+    frame();
+  }
+}
+window.__sky=new SkyBackground(document.getElementById('sky-bg'));
+
+// ── Gyroscope tilt ──
+document.getElementById('enable-tilt').addEventListener('click',async()=>{
+  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+    try{const perm=await DeviceOrientationEvent.requestPermission();if(perm==='granted')startTilt();}catch(e){}
+  }else{startTilt();}
+  document.getElementById('enable-tilt').classList.add('hidden');
+});
+function startTilt(){
+  window.addEventListener('deviceorientation',e=>{
+    const tiltX=Math.max(-1,Math.min(1,(e.gamma||0)/30));
+    const tiltY=Math.max(-1,Math.min(1,((e.beta||0)-45)/30));
+    if(window.__sky){window.__sky.tiltX=tiltX;window.__sky.tiltY=tiltY;}
+  });
+}
+document.addEventListener('mousemove',e=>{
+  if(window.__sky){
+    window.__sky.tiltX=(e.clientX/innerWidth-0.5)*2;
+    window.__sky.tiltY=(e.clientY/innerHeight-0.5)*2;
+  }
+});
+
+// ── Trade flight animation ──
+function launchTradePlane(event){
+  const layer=document.getElementById('flight-layer');
+  const plane=document.createElement('div');
+  plane.className='trade-plane';plane.textContent='✈️';
+  const startY=80+Math.random()*(innerHeight-300);
+  plane.style.left='-60px';plane.style.top=startY+'px';
+  const banner=document.createElement('div');
+  banner.className='trade-plane__banner';
+  banner.textContent=`${event.symbol} · ₹${(event.entry||0).toFixed(0)}`;
+  plane.appendChild(banner);layer.appendChild(plane);
+
+  const midX=innerWidth*0.55;
+  plane.animate([
+    {transform:'translateX(0) translateY(0) rotate(0deg)'},
+    {transform:`translateX(${midX}px) translateY(-20px) rotate(3deg)`}
+  ],{duration:1800,easing:'ease-out',fill:'forwards'});
+
+  setTimeout(()=>{
+    if(event.type==='TRADE_CLOSED'){handleCloseAnimation(plane,banner,event,midX);}
+    else{
+      plane.animate([
+        {transform:`translateX(${midX}px) translateY(-20px) rotate(3deg)`},
+        {transform:`translateX(${midX}px) translateY(-30px) rotate(-2deg)`},
+        {transform:`translateX(${midX}px) translateY(-20px) rotate(3deg)`}
+      ],{duration:2000,iterations:Infinity,easing:'ease-in-out'});
     }
-  },40);
-})();
-
-function initThreeJS(){
-  const canvas=document.getElementById('stage');
-  if(typeof THREE==='undefined')return;
-  const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:false});
-  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
-  renderer.setSize(innerWidth,innerHeight);
-  const scene=new THREE.Scene();
-  const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1000);
-  camera.position.z=5;
-  const count=2000,positions=new Float32Array(count*3);
-  for(let i=0;i<count*3;i++)positions[i]=(Math.random()-0.5)*20;
-  const geo=new THREE.BufferGeometry();
-  geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
-  const mat=new THREE.PointsMaterial({color:0xc9a84c,size:0.015,transparent:true,opacity:0.6});
-  const stars=new THREE.Points(geo,mat);scene.add(stars);
-  let mouseX=0,mouseY=0;
-  document.addEventListener('mousemove',e=>{
-    mouseX=(e.clientX/innerWidth-0.5)*0.3;mouseY=(e.clientY/innerHeight-0.5)*0.3;});
-  function animate(){
-    requestAnimationFrame(animate);
-    stars.rotation.y+=0.0003;stars.rotation.x+=0.0001;
-    camera.position.x+=(mouseX-camera.position.x)*0.05;
-    camera.position.y+=(-mouseY-camera.position.y)*0.05;
-    camera.lookAt(scene.position);renderer.render(scene,camera);}
-  animate();
-  window.addEventListener('resize',()=>{
-    camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth,innerHeight);});
+  },1800);
+  setTimeout(()=>plane.remove(),15000);
+  addFlightLogEntry(event);
 }
 
-function initCursor(){
-  const cursor=document.querySelector('.cursor');if(!cursor)return;
-  const dot=cursor.querySelector('.cursor__dot'),ring=cursor.querySelector('.cursor__ring');
-  let rx=0,ry=0;
-  document.addEventListener('mousemove',e=>{
-    dot.style.left=e.clientX+'px';dot.style.top=e.clientY+'px';
-    rx+=(e.clientX-rx)*0.15;ry+=(e.clientY-ry)*0.15;});
-  function followRing(){ring.style.left=rx+'px';ring.style.top=ry+'px';requestAnimationFrame(followRing);}
-  followRing();
+function handleCloseAnimation(plane,banner,event,midX){
+  const won=event.outcome==='WIN';
+  banner.textContent=`${event.symbol} ${won?'🎉 +':'🪂 '}${Math.abs(event.pnl_pct||0).toFixed(1)}%`;
+  banner.classList.add(won?'win':'loss');
+  if(won){
+    plane.animate([
+      {transform:`translateX(${midX}px) translateY(-20px) rotate(0deg)`},
+      {transform:`translateX(${midX+40}px) translateY(-120px) rotate(180deg)`},
+      {transform:`translateX(${midX+80}px) translateY(-20px) rotate(360deg)`},
+      {transform:`translateX(${innerWidth+100}px) translateY(-40px) rotate(370deg)`}
+    ],{duration:2200,easing:'ease-in-out',fill:'forwards'});
+    spawnConfetti(midX+innerWidth*0.02,160);
+  }else{
+    plane.animate([
+      {transform:`translateX(${midX}px) translateY(-20px) rotate(0deg)`},
+      {transform:`translateX(${midX-10}px) translateY(10px) rotate(-15deg)`},
+      {transform:`translateX(${midX+10}px) translateY(40px) rotate(10deg)`},
+      {transform:`translateX(${midX}px) translateY(80px) rotate(0deg)`}
+    ],{duration:1600,easing:'ease-in',fill:'forwards'});
+    setTimeout(()=>{
+      const chute=document.createElement('div');
+      chute.className='parachute';chute.textContent='🪂';
+      chute.style.left=(midX-10)+'px';chute.style.top='60px';
+      document.getElementById('flight-layer').appendChild(chute);
+      setTimeout(()=>chute.remove(),3000);
+    },1200);
+  }
+  setTimeout(()=>{plane.remove();},3500);
 }
 
-function initLenis(){
-  if(typeof Lenis==='undefined')return null;
-  const lenis=new Lenis({duration:1.4,easing:t=>Math.min(1,1.001-Math.pow(2,-10*t))});
-  function raf(time){lenis.raf(time);requestAnimationFrame(raf);}
-  requestAnimationFrame(raf);
-  return lenis;
+function spawnConfetti(x,y){
+  const layer=document.getElementById('flight-layer');
+  const colors=['#ffd93d','#4dd8ff','#3ddc97','#ff6ec7'];
+  for(let i=0;i<16;i++){
+    const bit=document.createElement('div');
+    bit.style.cssText=`position:absolute;left:${x}px;top:${y}px;width:6px;height:6px;`+
+      `background:${colors[i%4]};border-radius:2px;`;
+    layer.appendChild(bit);
+    const angle=(i/16)*Math.PI*2;
+    bit.animate([
+      {transform:'translate(0,0) rotate(0deg)',opacity:1},
+      {transform:`translate(${Math.cos(angle)*100}px,${Math.sin(angle)*100+60}px) rotate(360deg)`,opacity:0}
+    ],{duration:900,easing:'ease-out',fill:'forwards'});
+    setTimeout(()=>bit.remove(),900);
+  }
 }
 
-function initScrollTrigger(){
-  if(typeof gsap==='undefined')return;
-  gsap.registerPlugin(ScrollTrigger);
-  gsap.utils.toArray('.mask .line').forEach((line,i)=>{
-    gsap.from(line,{y:'110%',duration:1.2,delay:0.3+i*0.15,ease:'power4.out'});});
-  gsap.utils.toArray('.reveal').forEach(el=>{
-    gsap.from(el,{scrollTrigger:{trigger:el,start:'top 85%',toggleActions:'play none none none'},
-      opacity:0,y:40,duration:0.9,ease:'power3.out'});});
-  gsap.from('.reveal-metric',{opacity:0,y:60,stagger:0.1,duration:0.9,delay:0.8,ease:'power3.out'});
-  gsap.from('.reveal-kicker',{opacity:0,duration:1.2,delay:0.2,ease:'power2.out'});
-  document.querySelectorAll('.chapter').forEach(sec=>{
-    ScrollTrigger.create({trigger:sec,start:'top center',end:'bottom center',
-      onToggle:self=>{if(self.isActive){
-        document.querySelectorAll('.rail__dot').forEach(d=>d.classList.remove('active'));
-        const ch=sec.getAttribute('data-ch');
-        document.querySelector(`.rail__dot[data-chapter="${ch}"]`)?.classList.add('active');}}});});
+const _flightLog=[];
+function addFlightLogEntry(event){
+  const won=event.outcome==='WIN',cls=event.type==='TRADE_CLOSED'?(won?'win':'loss'):'';
+  const label=event.type==='TRADE_CLOSED'
+    ? `${event.symbol} closed ${won?'WIN':'LOSS'} ${(event.pnl_pct||0).toFixed(1)}%`
+    : `${event.symbol} opened @ ₹${(event.entry||0).toFixed(0)}`;
+  _flightLog.unshift({label,cls});
+  _flightLog.splice(5);
+  const el=document.getElementById('flight-log-list');
+  el.innerHTML=_flightLog.map(e=>`<div class="flight-log__item ${e.cls}">${e.label}</div>`).join('');
 }
 
+// ── Warp flash on room enter ──
+const _warpObserver=new IntersectionObserver(entries=>{
+  entries.forEach(entry=>{
+    if(entry.isIntersecting&&entry.intersectionRatio>0.5){
+      const flash=document.getElementById('warp-flash');
+      flash.classList.remove('active');void flash.offsetWidth;flash.classList.add('active');
+    }
+  });
+},{threshold:[0.5]});
+document.querySelectorAll('.room').forEach(r=>_warpObserver.observe(r));
+
+// ── Clock + market status ──
 function startClock(){
   const el=document.getElementById('live-clock');
   function update(){
     const ist=new Intl.DateTimeFormat('en-IN',{timeZone:'Asia/Kolkata',hour12:false,
-      hour:'2-digit',minute:'2-digit',second:'2-digit',weekday:'short',day:'numeric',month:'short'}).format(new Date());
+      hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date());
     el.textContent=ist+' IST';}
   update();setInterval(update,1000);
 }
-
 function updateMarketStatus(){
   const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
   const h=ist.getHours(),m=ist.getMinutes(),day=ist.getDay(),total=h*60+m;
@@ -486,7 +473,8 @@ function countUp(el,target,duration=1200,prefix='',suffix='',dec=0){
   function frame(now){
     const p=Math.min((now-start)/duration,1),eased=1-Math.pow(1-p,4);
     el.textContent=prefix+(target*eased).toFixed(dec)+suffix;
-    if(p<1)requestAnimationFrame(frame);else el.textContent=prefix+target.toFixed(dec)+suffix;}
+    if(p<1)requestAnimationFrame(frame);else el.textContent=prefix+target.toFixed(dec)+suffix;
+  }
   requestAnimationFrame(frame);
 }
 
@@ -495,89 +483,53 @@ function updatePnlChart(history){
   const canvas=document.getElementById('pnl-chart');if(!canvas)return;
   const ctx=canvas.getContext('2d');
   const labels=history.map(d=>d.symbol||'?'),data=history.map(d=>d.pnl||0);
-  const colors=data.map(v=>v>=0?'#c9a84c':'#ef4444');
+  const colors=data.map(v=>v>=0?'#3ddc97':'#ff5c7a');
   if(pnlChart){pnlChart.data.labels=labels;pnlChart.data.datasets[0].data=data;
     pnlChart.data.datasets[0].backgroundColor=colors;pnlChart.update('active');return;}
-  Chart.defaults.color='#6b6560';Chart.defaults.font.family="'Space Grotesk', sans-serif";
-  pnlChart=new Chart(ctx,{type:'bar',data:{labels,datasets:[{data,backgroundColor:colors,
-    borderRadius:0,borderSkipped:false,borderWidth:0}]},
+  Chart.defaults.color='#c9b8e0';Chart.defaults.font.family="'Space Grotesk', sans-serif";
+  pnlChart=new Chart(ctx,{type:'bar',data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:6}]},
     options:{responsive:true,animation:{duration:800},plugins:{legend:{display:false}},
-      scales:{x:{grid:{color:'#1a1a1a'},ticks:{font:{size:9}}},
-              y:{grid:{color:'#1a1a1a'},ticks:{font:{size:9},callback:v=>v+'%'}}}}});
+      scales:{x:{grid:{color:'rgba(255,255,255,.06)'},ticks:{font:{size:9}}},
+              y:{grid:{color:'rgba(255,255,255,.06)'},ticks:{font:{size:9},callback:v=>v+'%'}}}}});
 }
 
 function renderConstellation(entries){
-  const canvas=document.getElementById('kb-constellation');
-  if(!canvas)return;
+  const canvas=document.getElementById('kb-constellation');if(!canvas)return;
   const ctx=canvas.getContext('2d');
-  const W=canvas.width=canvas.offsetWidth||600,H=canvas.height=200;
+  const W=canvas.width=canvas.offsetWidth||400,H=canvas.height=140;
   ctx.clearRect(0,0,W,H);
   if(!entries||!entries.length)return;
   const stars=entries.map((e,i)=>({
-    x:40+(i/Math.max(entries.length-1,1))*(W-80)+Math.sin(i*1.5)*20,
-    y:40+(1-e.confidence)*120+Math.cos(i*2)*15,r:2+e.confidence*7,conf:e.confidence,
+    x:30+(i/Math.max(entries.length-1,1))*(W-60)+Math.sin(i*1.5)*15,
+    y:30+(1-e.confidence)*80+Math.cos(i*2)*10,r:2+e.confidence*6,conf:e.confidence,
     isRule:!e.is_hypothesis,category:e.category}));
-  ctx.strokeStyle='rgba(201,168,76,0.1)';ctx.lineWidth=1;
+  ctx.strokeStyle='rgba(255,217,61,0.15)';ctx.lineWidth=1;
   for(let i=0;i<stars.length;i++)for(let j=i+1;j<stars.length;j++){
     if(entries[i].category===entries[j].category){
       ctx.beginPath();ctx.moveTo(stars[i].x,stars[i].y);ctx.lineTo(stars[j].x,stars[j].y);ctx.stroke();}}
   stars.forEach(s=>{
-    if(s.isRule){
-      const g=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,s.r*3);
-      g.addColorStop(0,'rgba(201,168,76,0.3)');g.addColorStop(1,'rgba(201,168,76,0)');
-      ctx.fillStyle=g;ctx.beginPath();ctx.arc(s.x,s.y,s.r*3,0,Math.PI*2);ctx.fill();}
-    ctx.fillStyle=s.conf>=0.7?'#c9a84c':s.conf>=0.4?'#f5d78e80':'#6b656080';
+    ctx.fillStyle=s.conf>=0.7?'#ffd93d':s.conf>=0.4?'#4dd8ff':'#c9b8e0';
     ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();});
 }
 
-const popupQueue=[];let popupActive=false;
-function enqueuePopup(event){popupQueue.push(event);if(!popupActive)drainPopupQueue();}
-function drainPopupQueue(){
-  if(!popupQueue.length){popupActive=false;return;}
-  popupActive=true;
-  const ev=popupQueue.shift(),popup=document.getElementById('trade-popup');
-  popup.className='trade-popup';
-  const won=ev.outcome==='WIN';
-  if(ev.type==='TRADE_OPENED'){
-    popup.classList.add('open-trade');
-    document.getElementById('popup-kicker').textContent='◆ TRADE OPENED';
-  }else{
-    popup.classList.add(won?'win-trade':'loss-trade');
-    document.getElementById('popup-kicker').textContent=won?'▲ WIN':'▼ LOSS';
-  }
-  document.getElementById('popup-symbol').textContent=ev.symbol||'?';
-  document.getElementById('popup-details').innerHTML=
-    `Entry ₹${Number(ev.entry||0).toLocaleString('en-IN')}<br>`+
-    `Stop ₹${Number(ev.stop||0).toLocaleString('en-IN')}`+
-    (ev.target?` · Target ₹${Number(ev.target).toLocaleString('en-IN')}`:'');
-  const pnlEl=document.getElementById('popup-pnl');
-  if(ev.pnl_pct!=null){
-    pnlEl.textContent=`${ev.pnl_pct>0?'+':''}${Number(ev.pnl_pct).toFixed(1)}%`;
-    pnlEl.className='trade-popup__pnl '+(won?'win':'loss');
-  }else{pnlEl.textContent='';}
-  requestAnimationFrame(()=>popup.classList.add('visible'));
-  setTimeout(()=>{popup.classList.remove('visible');setTimeout(drainPopupQueue,600);},4500);
-}
-
 const REGIME_EMOJI={BULL_TRENDING:'🐂',BEAR_TRENDING:'🐻',VOLATILE:'⚡',RANGE_BOUND:'↔',
-  RECOVERY:'🌱',TRANSITIONAL:'🌀',UNKNOWN:'◆'};
+  RECOVERY:'🌱',TRANSITIONAL:'🌀',UNKNOWN:'🚀'};
 
 function updatePositions(positions){
   const el=document.getElementById('positions-container');if(!el)return;
   if(!positions.length){
-    el.innerHTML='<p class="empty-state"><em>The system is learning.<br/>'+
-      'Positions appear when signals clear all checks.</em></p>';return;}
+    el.innerHTML='<div class="empty-hangar"><div class="empty-hangar__anim">🛩️</div>'+
+      '<div class="empty-hangar__text">Scanning the skies for opportunities... 🔭</div></div>';
+    return;}
   el.innerHTML='';
   positions.forEach(p=>{
     const pct=p.entry&&p.target?Math.min(100,Math.max(0,(p.current-p.entry)/(p.target-p.entry)*100)):50;
     const pnlClass=(p.pnl_pct||0)>=0?'up':'down',sign=(p.pnl_pct||0)>=0?'+':'';
     el.innerHTML+=`
       <div class="position-card">
-        <div>
-          <div class="position-card__symbol">${p.symbol}</div>
-          <div class="position-card__meta">Entry ₹${(p.entry||0).toLocaleString('en-IN')} · `+
-            `Stop ₹${(p.stop||0).toLocaleString('en-IN')} · ${p.days_held||0}d held</div>
-        </div>
+        <div class="position-card__symbol">${p.symbol}</div>
+        <div class="position-card__meta">Entry ₹${(p.entry||0).toLocaleString('en-IN')} · `+
+          `Stop ₹${(p.stop||0).toLocaleString('en-IN')} · ${p.days_held||0}d held</div>
         <div class="position-card__pnl ${pnlClass}">${sign}${(p.pnl_pct||0).toFixed(1)}%</div>
         <div class="position-card__progress"><div class="position-card__progress-fill" style="width:${pct}%"></div></div>
       </div>`;
@@ -587,11 +539,10 @@ function updatePositions(positions){
 function updateKnowledge(entries){
   const el=document.getElementById('knowledge-list');if(!el)return;
   el.innerHTML='';
-  entries.slice(0,10).forEach(e=>{
+  entries.slice(0,8).forEach(e=>{
     const desc=e.description||'';
-    const won=desc.includes('WON')||(!desc.includes('LOST')&&!desc.includes('LOSS'));
     el.innerHTML+=`
-      <div class="knowledge-entry ${won?'win':''}">
+      <div class="knowledge-entry">
         <div class="knowledge-entry__conf">${Math.round(e.confidence*100)}%</div>
         <div class="knowledge-entry__desc">${desc}</div>
         <div class="knowledge-entry__count">${e.count}×</div>
@@ -609,56 +560,39 @@ function updateThresholds(adaptive,currentRegime){
     const evidence=data.evidence||0,adj=(data.judge_min||6.5)-6.5;
     const direction=adj<-0.05?'↓ easier':adj>0.05?'↑ harder':'→ default';
     el.innerHTML+=`
-      <div class="threshold-card ${isActive?'active-regime':''}">
-        <div class="threshold-card__regime">${regime}</div>
-        <div class="threshold-card__value">${(data.judge_min||6.5).toFixed(1)}/10</div>
-        <div class="threshold-card__sub">${direction} · ${evidence} trades · ${wr}</div>
+      <div class="threshold-chip ${isActive?'active-regime':''}">
+        <div class="threshold-chip__regime">${regime}</div>
+        <div class="threshold-chip__value">${(data.judge_min||6.5).toFixed(1)}</div>
+        <div class="threshold-chip__sub">${direction} · ${evidence}t · ${wr}</div>
       </div>`;
   });
 }
 
-function updateTicker(positions,nifty,rsi,regime){
-  const el=document.getElementById('price-ticker');if(!el)return;
-  let items=[`◆ COSMIC PUNK`,`NIFTY ₹${(nifty||0).toLocaleString('en-IN')}`,
-    `RSI ${(rsi||0).toFixed(1)}`,`${regime}`];
-  (positions||[]).forEach(p=>{
-    const s=(p.pnl_pct||0)>=0?'▲':'▼';
-    items.push(`${p.symbol} ${s} ${Math.abs(p.pnl_pct||0).toFixed(1)}%`);});
-  const html=items.join(' &nbsp;·&nbsp; ');
-  el.innerHTML=html+' &nbsp;·&nbsp; '+html;
-}
-
 function updateDashboard(d){
-  if(d.error){return;}
-  if(d.event)enqueuePopup(d.event);
+  if(d.error)return;
+  if(d.event)launchTradePlane(d.event);
 
   const s=d.summary||{},forced=d.forced_trades||{},learning=d.learning_metrics||{},
     adaptive=d.adaptive_thresholds||{},regimeData=d.regime||{},intra=d.intraday_sim||{};
 
-  const nameEl=document.getElementById('hero-name');
-  if(nameEl&&!nameEl.dataset.set){nameEl.textContent=(d.owner||OWNER).toUpperCase();nameEl.dataset.set='1';}
+  document.getElementById('owner').textContent=d.owner||OWNER;
 
   countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
   countUp(document.getElementById('metric-wr'),s.win_rate||0,1200,'','%',1);
-  countUp(document.getElementById('metric-kb'),(d.knowledge||[]).length,800);
   countUp(document.getElementById('metric-pnl'),s.total_pnl_inr||0,1200,'₹','',2);
+  countUp(document.getElementById('metric-kb'),(d.knowledge||[]).length,800);
+  countUp(document.getElementById('metric-forced'),forced.total||0,600);
+  countUp(document.getElementById('metric-simwr'),intra.win_rate||0,600,'','%',0);
+  countUp(document.getElementById('metric-xgb'),learning.xgboost_progress||0,600,'','%',0);
+  countUp(document.getElementById('metric-replay'),learning.replay_patterns||0,600);
 
   const regime=regimeData.regime||'UNKNOWN';
-  const heroRegime=document.getElementById('hero-regime');
-  if(heroRegime)heroRegime.textContent=regime.replace(/_/g,' ');
-  const regimeEmoji=document.getElementById('regime-emoji');
-  if(regimeEmoji)regimeEmoji.textContent=REGIME_EMOJI[regime]||'◆';
-  const regimeName=document.getElementById('regime-name');
-  if(regimeName)regimeName.textContent=regime.replace(/_/g,' ');
-  const strEl=document.getElementById('strategy-rec');
-  if(strEl)strEl.innerHTML=`<em>${regimeData.strategy||'Analysing market...'}</em>`;
-
-  const nifty=d.nifty_price||0,niftyEl=document.getElementById('nifty-price');
-  if(niftyEl)niftyEl.textContent='₹'+Number(nifty).toLocaleString('en-IN',{maximumFractionDigits:0});
-  const rsi=d.nifty_rsi||0,arc=document.getElementById('rsi-arc');
-  if(arc){const circ=2*Math.PI*54;arc.style.strokeDashoffset=circ*(1-Math.max(0,Math.min(100,rsi))/100);
-    arc.style.stroke=rsi>=60?'#c9a84c':rsi>=40?'#f5d78e':'#ef4444';}
-  const rsiVal=document.getElementById('rsi-value');if(rsiVal)rsiVal.textContent=rsi.toFixed(0);
+  document.getElementById('regime-emoji').textContent=REGIME_EMOJI[regime]||'🚀';
+  document.getElementById('regime-name').textContent=regime.replace(/_/g,' ');
+  const nifty=d.nifty_price||0;
+  document.getElementById('nifty-price').textContent='NIFTY ₹'+Number(nifty).toLocaleString('en-IN',{maximumFractionDigits:0});
+  document.getElementById('rsi-value').textContent='RSI '+(d.nifty_rsi||0).toFixed(1);
+  document.getElementById('funny-line').textContent=d.funny_line||'';
 
   updatePositions(d.positions||[]);
   if((d.pnl_history||[]).length)updatePnlChart(d.pnl_history);
@@ -672,32 +606,20 @@ function updateDashboard(d){
   updateKnowledge(d.knowledge||[]);
 
   countUp(document.getElementById('forced-total'),forced.total||0,600);
-  const fwrEl=document.getElementById('forced-wr');
-  if(fwrEl)fwrEl.textContent=(forced.win_rate||0).toFixed(0)+'% win rate';
-
   countUp(document.getElementById('sim-total'),intra.total||0,600);
-  const swrEl=document.getElementById('sim-wr');
-  if(swrEl)swrEl.textContent=(intra.win_rate||0).toFixed(0)+'% win rate';
-
-  countUp(document.getElementById('replay-covered'),learning.replay_patterns||0,800);
+  countUp(document.getElementById('replay-covered'),learning.replay_patterns||0,600);
 
   const xgbPct=learning.xgboost_progress||0;
-  const fill=document.getElementById('xgb-fill'),label=document.getElementById('xgb-label'),
-    sub=document.getElementById('xgb-sub');
-  if(fill)fill.style.width=xgbPct+'%';
-  if(label)label.textContent=xgbPct+'%';
-  if(sub)sub.textContent=xgbPct>=100?'Model active — predicting win probability'
-    :`${Math.max(0,30-Math.round(xgbPct*0.3))} more trades needed`;
+  document.getElementById('xgb-fill').style.width=xgbPct+'%';
+  document.getElementById('xgb-label-text').textContent=xgbPct+'%';
 
   updateThresholds(adaptive,regime);
-  updateTicker(d.positions||[],nifty,rsi,regime);
 
-  const nextJob=(d.next_jobs&&d.next_jobs[0])?`${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'No more jobs today';
-  const sbMode=document.getElementById('sb-mode');if(sbMode)sbMode.textContent=d.mode||'—';
-  const sbUp=document.getElementById('sb-uptime');if(sbUp)sbUp.textContent=d.system_uptime||'—';
-  const sbNext=document.getElementById('sb-next');if(sbNext)sbNext.textContent=nextJob;
-  const sbKb=document.getElementById('sb-kb');if(sbKb)sbKb.textContent=(d.knowledge||[]).length;
-  const sbUpd=document.getElementById('sb-updated');if(sbUpd)sbUpd.textContent=(d.timestamp||'').slice(11,19)+' IST';
+  const nextJob=(d.next_jobs&&d.next_jobs[0])?`${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'None today';
+  document.getElementById('sb-mode').textContent=d.mode||'—';
+  document.getElementById('sb-uptime').textContent=d.system_uptime||'—';
+  document.getElementById('sb-next').textContent=nextJob;
+  document.getElementById('sb-updated').textContent=(d.timestamp||'').slice(11,19)+' IST';
 
   document.getElementById('killswitch-banner').style.display=d.kill_switch?'block':'none';
 }
@@ -711,17 +633,9 @@ function connectWS(){
   ws.onerror=()=>ws.close();
 }
 
-function initAll(){
-  initThreeJS();
-  initCursor();
-  const lenis=initLenis();
-  if(lenis&&typeof gsap!=='undefined'){gsap.ticker.add(time=>lenis.raf(time*1000));gsap.ticker.lagSmoothing(0);}
-  initScrollTrigger();
-  startClock();
-  setInterval(updateMarketStatus,30000);
-  updateMarketStatus();
-  connectWS();
-}
+startClock();
+setInterval(updateMarketStatus,30000);updateMarketStatus();
+connectWS();
 </script>
 </body>
 </html>

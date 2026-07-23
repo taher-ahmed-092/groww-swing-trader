@@ -231,6 +231,13 @@ def collect_dashboard_data() -> dict:
         except Exception:
             adaptive_data = {}
 
+        try:
+            from src.utils.funny_copy import get_regime_joke
+
+            funny_line = get_regime_joke(regime_data.get("regime", "UNKNOWN"))
+        except Exception:
+            funny_line = ""
+
         now_ist = datetime.now(IST)
         data = {
             "timestamp": now_ist.isoformat(),
@@ -266,6 +273,7 @@ def collect_dashboard_data() -> dict:
             "forced_trades": forced_summary,
             "learning_metrics": learning_metrics,
             "adaptive_thresholds": adaptive_data,
+            "funny_line": funny_line,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)
