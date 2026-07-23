@@ -778,6 +778,22 @@ class CommandHandler:
                 f"{src_wr}% WR  avg {avg_pnl:+.1f}%"
             )
 
+        avg_win = sum(t["pnl"] for t in merged if t["pnl"] > 0) / max(won, 1)
+        avg_loss = sum(t["pnl"] for t in merged if t["pnl"] < 0) / max(lost, 1)
+        expectancy = wr / 100 * avg_win + (1 - wr / 100) * avg_loss
+        breakeven_wr = (abs(avg_loss) / (avg_win + abs(avg_loss)) * 100
+                        if (avg_win + abs(avg_loss)) > 0 else 50)
+
+        lines.append("")
+        lines.append("*Risk-Adjusted View:*")
+        lines.append(f"Avg win: {avg_win:+.1f}%  |  Avg loss: {avg_loss:+.1f}%")
+        lines.append(f"Expectancy: {expectancy:+.2f}% per trade")
+        lines.append(f"Break-even WR needed: {breakeven_wr:.0f}%")
+        if expectancy > 0:
+            lines.append("✅ *System is EV-positive despite low WR*")
+        else:
+            lines.append("⚠️ *Negative EV — R:R needs improvement*")
+
         self._send("\n".join(lines))
 
     def _handle_thresholds(self, args):

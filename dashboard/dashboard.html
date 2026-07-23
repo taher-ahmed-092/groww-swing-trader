@@ -65,8 +65,9 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
   border-radius:20px;padding:20px}
 
 /* ── Scoreboard ── */
-.scoreboard{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--panel-border);
+.scoreboard{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--panel-border);
   border-radius:16px;overflow:hidden;margin:16px 0 24px}
+@media(max-width:768px){.scoreboard{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:600px){.scoreboard{grid-template-columns:repeat(2,1fr)}}
 .sb-tile{background:var(--panel-bg);backdrop-filter:blur(16px);padding:20px 16px;text-align:center}
 .sb-tile--win{border-top:3px solid var(--green)}
@@ -229,6 +230,10 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
       <div class="sb-num" id="sb-wr">0%</div>
       <div class="sb-label">WIN RATE</div>
     </div>
+    <div class="sb-tile" id="sb-ev-tile">
+      <div class="sb-num" id="sb-ev">0%</div>
+      <div class="sb-label">EXPECTANCY</div>
+    </div>
   </div>
 
   <div class="panel hud-strip">
@@ -314,6 +319,19 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     </div>
     <div class="xgb-track"><div class="xgb-fill" id="xgb-fill"></div></div>
     <div class="thresholds-mini" id="thresholds-grid"></div>
+
+    <div style="margin-top:24px">
+      <div class="room__sub" style="font-weight:700;color:var(--text);margin-bottom:10px">🔬 Why Trades Are Failing</div>
+      <table class="mini-table" style="width:100%;font-family:var(--font-mono);font-size:12px;border-collapse:collapse">
+        <thead><tr style="color:var(--text-muted);text-align:left">
+          <th style="padding:4px 8px">Regime</th><th style="padding:4px 8px">Trades</th>
+          <th style="padding:4px 8px">WR</th><th style="padding:4px 8px">Threshold</th>
+          <th style="padding:4px 8px">Status</th>
+        </tr></thead>
+        <tbody id="diagnosis-tbody"></tbody>
+      </table>
+    </div>
+
     <div class="system-status">
       <div>MODE <b id="sb-mode">—</b></div>
       <div>UPTIME <b id="sb-uptime">—</b></div>
@@ -749,6 +767,29 @@ function updateThresholds(adaptive,currentRegime){
   });
 }
 
+function updateLossDiagnosis(adaptive){
+  const tbody=document.getElementById('diagnosis-tbody');
+  if(!tbody)return;
+  tbody.innerHTML='';
+  Object.entries(adaptive||{}).forEach(([regime,data])=>{
+    const wr=(data.win_rate||0)*100;
+    const evidence=data.evidence||0;
+    const thresh=data.judge_min||6.5;
+    let status,color;
+    if(evidence<15){status='⏳ Learning';color='var(--text-muted)';}
+    else if(wr>=45){status='🟢 Working';color='var(--green)';}
+    else if(thresh>7.0){status='🔧 Adapting';color='var(--gold)';}
+    else{status='🔴 Challenging';color='var(--red)';}
+    tbody.innerHTML+=`<tr>
+      <td style="padding:4px 8px;border-top:1px solid var(--panel-border)">${regime}</td>
+      <td style="padding:4px 8px;border-top:1px solid var(--panel-border)">${evidence}</td>
+      <td style="padding:4px 8px;border-top:1px solid var(--panel-border);color:${wr>=45?'var(--green)':'var(--red)'}">${wr.toFixed(0)}%</td>
+      <td style="padding:4px 8px;border-top:1px solid var(--panel-border)">${thresh.toFixed(1)}/10</td>
+      <td style="padding:4px 8px;border-top:1px solid var(--panel-border);color:${color}">${status}</td>
+    </tr>`;
+  });
+}
+
 function updateDashboard(d){
   if(d.error)return;
   if(d.event)launchTradePlane(d.event);
@@ -768,6 +809,14 @@ function updateDashboard(d){
     wrEl.textContent=wr.toFixed(1)+'%';
     wrEl.style.color=wr>=55?'var(--green)':wr>=45?'var(--gold)':'var(--red)';
   }
+  const evEl=document.getElementById('sb-ev');
+  const ev=ct.expectancy_pct||0;
+  if(evEl){
+    evEl.textContent=(ev>0?'+':'')+ev.toFixed(2)+'%';
+    evEl.style.color=ev>0?'var(--green)':ev>-0.5?'var(--gold)':'var(--red)';
+  }
+  document.getElementById('sb-ev-tile')?.setAttribute('title',
+    `Avg win: ${ct.avg_win_pct}% | Avg loss: ${ct.avg_loss_pct}% | Break-even WR: ${ct.breakeven_wr}%`);
 
   countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
   countUp(document.getElementById('metric-wr'),s.win_rate||0,1200,'','%',1);
@@ -806,6 +855,7 @@ function updateDashboard(d){
   document.getElementById('xgb-label-text').textContent=xgbPct+'%';
 
   updateThresholds(adaptive,regime);
+  updateLossDiagnosis(adaptive);
 
   const nextJob=(d.next_jobs&&d.next_jobs[0])?`${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'None today';
   document.getElementById('sb-mode').textContent=d.mode||'—';
@@ -816,26 +866,109 @@ function updateDashboard(d){
   document.getElementById('killswitch-banner').style.display=d.kill_switch?'block':'none';
 }
 
-// ── Click-anywhere sparkle burst ──
+// ── Click-anywhere plane crash ──
+let lastCrash=0;
 document.addEventListener('click',(e)=>{
-  if(e.target.closest('button, a, .knowledge-entry, .lesson-modal, #enable-tilt'))return;
-  spawnClickBurst(e.clientX,e.clientY);
+  if(e.target.closest('button, a, .knowledge-entry, .lesson-modal, #enable-tilt, input, select'))return;
+  const now=Date.now();
+  if(now-lastCrash<300)return;
+  lastCrash=now;
+  spawnPlaneCrash(e.clientX,e.clientY);
 });
-function spawnClickBurst(x,y){
-  const colors=['#ffd93d','#4dd8ff','#3ddc97','#ff6ec7'];
-  const emojis=['✨','⭐','🌟','💫'];
-  for(let i=0;i<8;i++){
-    const bit=document.createElement('div');
-    bit.textContent=emojis[Math.floor(Math.random()*emojis.length)];
-    bit.style.cssText=`position:fixed;left:${x}px;top:${y}px;font-size:16px;pointer-events:none;z-index:600;`;
-    document.body.appendChild(bit);
-    const angle=(i/8)*Math.PI*2+Math.random()*0.5,dist=40+Math.random()*40;
-    bit.animate([
-      {transform:'translate(0,0) scale(1)',opacity:1},
-      {transform:`translate(${Math.cos(angle)*dist}px,${Math.sin(angle)*dist}px) scale(0.3)`,opacity:0}
-    ],{duration:600,easing:'ease-out',fill:'forwards'});
-    setTimeout(()=>bit.remove(),600);
-  }
+
+function spawnPlaneCrash(x,y){
+  const layer=document.getElementById('flight-layer');
+  if(!layer)return;
+
+  const plane=document.createElement('div');
+  const planeFacing=Math.random()>0.5?'✈️':'🛩️';
+  plane.textContent=planeFacing;
+  plane.style.cssText=`position:fixed;left:${x}px;top:${y}px;font-size:24px;pointer-events:none;`+
+    `z-index:600;transform:translate(-50%,-50%);filter:drop-shadow(0 2px 6px rgba(0,0,0,0.4));`;
+  layer.appendChild(plane);
+
+  const flyAngle=Math.random()*Math.PI*2;
+  const flyDist=60+Math.random()*40;
+  const midX=x+Math.cos(flyAngle)*flyDist;
+  const midY=y+Math.sin(flyAngle)*flyDist;
+
+  plane.animate([
+    {transform:`translate(-50%,-50%) rotate(${flyAngle*180/Math.PI}deg)`},
+    {transform:`translate(calc(-50% + ${Math.cos(flyAngle)*flyDist}px), calc(-50% + ${Math.sin(flyAngle)*flyDist}px)) rotate(${flyAngle*180/Math.PI}deg)`}
+  ],{duration:800,easing:'ease-in',fill:'forwards'});
+
+  let smokeInterval=setInterval(()=>{
+    const dot=document.createElement('div');
+    const rect=plane.getBoundingClientRect();
+    dot.style.cssText=`position:fixed;left:${rect.left+rect.width/2}px;top:${rect.top+rect.height/2}px;`+
+      `width:6px;height:6px;background:rgba(180,180,180,0.7);border-radius:50%;pointer-events:none;z-index:599;`;
+    layer.appendChild(dot);
+    dot.animate([
+      {transform:'scale(1)',opacity:0.7},
+      {transform:'scale(3)',opacity:0}
+    ],{duration:500,easing:'ease-out',fill:'forwards'});
+    setTimeout(()=>dot.remove(),500);
+  },80);
+
+  setTimeout(()=>{
+    clearInterval(smokeInterval);
+    const crashDist=120+Math.random()*60;
+    const spiralEndX=midX+(Math.random()-0.5)*80;
+    const spiralEndY=midY+crashDist;
+
+    plane.animate([
+      {transform:`translate(calc(-50% + ${midX-x}px), calc(-50% + ${midY-y}px)) rotate(${flyAngle*180/Math.PI}deg)`},
+      {transform:`translate(calc(-50% + ${midX-x+20}px), calc(-50% + ${midY-y+40}px)) rotate(${flyAngle*180/Math.PI+45}deg)`},
+      {transform:`translate(calc(-50% + ${spiralEndX-x}px), calc(-50% + ${spiralEndY-y}px)) rotate(${flyAngle*180/Math.PI+180}deg)`,fontSize:'16px'}
+    ],{duration:1200,easing:'ease-in',fill:'forwards'});
+
+    let crashSmoke=setInterval(()=>{
+      const rect=plane.getBoundingClientRect();
+      const dot=document.createElement('div');
+      dot.style.cssText=`position:fixed;left:${rect.left}px;top:${rect.top}px;`+
+        `font-size:${8+Math.random()*8}px;pointer-events:none;z-index:599;`;
+      dot.textContent='💨';
+      layer.appendChild(dot);
+      dot.animate([
+        {transform:'translate(0,0) scale(1)',opacity:0.8},
+        {transform:`translate(${(Math.random()-0.5)*30}px,-20px) scale(0.3)`,opacity:0}
+      ],{duration:400,fill:'forwards'});
+      setTimeout(()=>dot.remove(),400);
+    },60);
+
+    setTimeout(()=>{
+      clearInterval(crashSmoke);
+      plane.remove();
+
+      const rect={left:spiralEndX,top:spiralEndY};
+      const burst=document.createElement('div');
+      burst.textContent='💥';
+      burst.style.cssText=`position:fixed;left:${rect.left}px;top:${rect.top}px;font-size:32px;`+
+        `pointer-events:none;z-index:601;transform:translate(-50%,-50%);`;
+      layer.appendChild(burst);
+      burst.animate([
+        {transform:'translate(-50%,-50%) scale(0.5)',opacity:1},
+        {transform:'translate(-50%,-50%) scale(1.8)',opacity:0}
+      ],{duration:400,easing:'ease-out',fill:'forwards'});
+      setTimeout(()=>burst.remove(),400);
+
+      const debrisEmojis=['🔩','⚙️','🪛','✨','⭐'];
+      for(let i=0;i<6;i++){
+        const db=document.createElement('div');
+        db.textContent=debrisEmojis[i%debrisEmojis.length];
+        db.style.cssText=`position:fixed;left:${rect.left}px;top:${rect.top}px;`+
+          `font-size:12px;pointer-events:none;z-index:600;`;
+        layer.appendChild(db);
+        const angle=(i/6)*Math.PI*2;
+        const dist=30+Math.random()*30;
+        db.animate([
+          {transform:'translate(-50%,-50%)',opacity:1},
+          {transform:`translate(calc(-50% + ${Math.cos(angle)*dist}px), calc(-50% + ${Math.sin(angle)*dist+20}px))`,opacity:0}
+        ],{duration:600,easing:'ease-out',fill:'forwards'});
+        setTimeout(()=>db.remove(),600);
+      }
+    },1200);
+  },800);
 }
 
 let ws=null;

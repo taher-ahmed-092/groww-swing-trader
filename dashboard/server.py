@@ -189,9 +189,20 @@ def _combined_totals(all_trades: list[dict]) -> dict:
         if t.get("outcome") == "LOSS":
             by_source[src]["lost"] += 1
 
+    wins = [t for t in all_trades if t.get("outcome") == "WIN"]
+    losses = [t for t in all_trades if t.get("outcome") == "LOSS"]
+    avg_win = sum(t.get("pnl", 0) for t in wins) / len(wins) if wins else 0
+    avg_loss = sum(t.get("pnl", 0) for t in losses) / len(losses) if losses else 0
+    wr_frac = total_won / total_taken if total_taken else 0
+    expectancy = round(wr_frac * avg_win + (1 - wr_frac) * avg_loss, 3)
+    breakeven_wr = (round(abs(avg_loss) / (avg_win + abs(avg_loss)) * 100, 1)
+                    if (avg_win + abs(avg_loss)) > 0 else 50.0)
+
     return {
         "total": total_taken, "won": total_won, "lost": total_lost,
         "win_rate": overall_wr, "by_source": by_source,
+        "avg_win_pct": round(avg_win, 2), "avg_loss_pct": round(avg_loss, 2),
+        "expectancy_pct": expectancy, "breakeven_wr": breakeven_wr,
     }
 
 

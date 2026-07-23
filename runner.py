@@ -642,7 +642,8 @@ def forced_trade_job() -> None:
 
 def forced_close_job() -> None:
     """Every 15 minutes, all day, 24/7 (offset from forced_trade_job) — close
-    forced trades that have hit the 15-min hold mark."""
+    forced trades that have hit the 90-min hold mark (checked frequently so
+    the close happens promptly once the mark is crossed)."""
     if _kill_switch():
         return
     from src.trading.always_on_trader import AlwaysOnTrader

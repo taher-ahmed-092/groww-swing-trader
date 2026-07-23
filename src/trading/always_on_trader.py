@@ -79,7 +79,9 @@ class AlwaysOnTrader:
         return trades
 
     def close_open_forced_trades(self) -> list[dict]:
-        """Close forced trades opened 15+ min ago, or any still open at/after 15:20 IST."""
+        """Close forced trades opened 90+ min ago, or any still open at/after 15:20 IST.
+        90 min (not 15) gives swing indicators realistic time to resolve — a 15-min
+        hold was closer to noise than signal."""
         open_trades = self._load_open_forced_trades()
         if not open_trades:
             return []
@@ -93,7 +95,7 @@ class AlwaysOnTrader:
                 elapsed_min = (now - opened_at).total_seconds() / 60
             except Exception:
                 elapsed_min = 999
-            if elapsed_min >= 15 or now >= market_closing:
+            if elapsed_min >= 90 or now >= market_closing:
                 result = self._close_forced_trade(trade)
                 if result:
                     closed.append(result)
@@ -138,8 +140,33 @@ class AlwaysOnTrader:
         chosen = random.choice(candidates[:5])  # top-5 for variety
         return self._build_trade_record(**chosen)
 
+    def _confirming_signals(self, ind: dict, regime: str) -> int:
+        """Counts confirmations among {supertrend bullish, OBV rising, above VWAP}.
+        Returns the count so callers can require 2-of-3 normally, or all 3 in a
+        regime the adaptive thresholds have flagged as historically bad (WR<35%)."""
+        supertrend_bull = ind.get("supertrend_direction") == "BULLISH"
+        obv_rising = ind.get("obv_trend") == "RISING"
+        above_vwap = ind.get("price_vs_vwap") == "ABOVE"
+        return sum([supertrend_bull, obv_rising, above_vwap])
+
+    def _passes_entry_filter(self, ind: dict, regime: str) -> bool:
+        confirming = self._confirming_signals(ind, regime)
+        if confirming < 2:
+            return False
+        try:
+            from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+            regime_data = AdaptiveThresholds().load().get(regime, {})
+            regime_wr = regime_data.get("win_rate", 0.5)
+        except Exception:
+            regime_wr = 0.5
+        if regime_wr < 0.35 and confirming < 3:
+            return False
+        return True
+
     def _score_all_candidates_live(self) -> list[dict]:
         sample = random.sample(FORCED_TRADE_UNIVERSE, min(40, len(FORCED_TRADE_UNIVERSE)))
+        regime = self._current_regime()
         results = []
         for symbol in sample:
             try:
@@ -150,6 +177,8 @@ class AlwaysOnTrader:
                 if entry <= 0:
                     continue
                 ind = compute_indicators(df)
+                if not self._passes_entry_filter(ind, regime):
+                    continue
                 score = self._quick_score(ind)
                 tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
                 results.append({
@@ -167,17 +196,23 @@ class AlwaysOnTrader:
         symbol = random.choice(
             random.sample(FORCED_TRADE_UNIVERSE, min(20, len(FORCED_TRADE_UNIVERSE))))
         try:
-            df = self.fetcher.get_price_history(symbol, period="30d")
-            if df is None or len(df) < 10:
+            df = self.fetcher.get_price_history(symbol, period="60d")
+            if df is None or len(df) < 21:
                 return None
-            entry_idx = len(df) - 2  # enter at second-to-last close, verify on the rest
-            if entry_idx < 5:
+            # Leave 10 future candles to let the signal play out before recording
+            # an outcome — checking only 1 candle (the old len(df)-2 entry point)
+            # made outcomes close to random.
+            entry_idx = len(df) - 11
+            if entry_idx < 10:
                 return None
             df_at_entry = df.iloc[: entry_idx + 1]
-            df_after = df.iloc[entry_idx + 1:]
+            df_after = df.iloc[entry_idx + 1: entry_idx + 11]
 
             entry = float(df_at_entry["Close"].iloc[-1])
             ind = compute_indicators(df_at_entry)
+            regime = self._current_regime()
+            if not self._passes_entry_filter(ind, regime):
+                return None
             score = self._quick_score(ind)
             atr = ind.get("atr_14") or (entry * 0.02)
             stop = max(round(entry - 1.5 * atr, 2), round(entry * 0.93, 2))  # ≤7% stop
