@@ -99,9 +99,31 @@
   .mini-table th{color:var(--muted);text-align:left;padding:4px 8px}
   .mini-table td{padding:4px 8px;border-top:1px solid var(--border)}
   .win-sim{color:var(--green)}.loss-sim{color:var(--red)}
+  .trade-popup{position:fixed;top:20px;right:20px;z-index:1000;min-width:260px;
+    background:var(--surface2);border-radius:12px;padding:16px 20px;
+    box-shadow:0 8px 32px rgba(0,0,0,0.4);transform:translateX(120%);
+    transition:transform 0.4s cubic-bezier(0.34,1.56,0.64,1);border-left:4px solid var(--accent)}
+  .trade-popup.visible{transform:translateX(0);animation:popupPulse 2s ease infinite}
+  .trade-popup.hidden{display:none}
+  .popup-header{font-size:11px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1px;margin-bottom:4px}
+  .popup-symbol{font-size:24px;font-weight:700;color:var(--accent)}
+  .popup-details{font-size:12px;color:var(--muted);margin:4px 0;font-family:monospace}
+  .popup-pnl{font-size:20px;font-weight:700;margin-top:8px}
+  .popup-pnl.win{color:var(--green)}.popup-pnl.loss{color:var(--red)}
+  @keyframes popupPulse{0%,100%{box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+    50%{box-shadow:0 8px 48px rgba(0,212,255,0.3)}}
 </style>
 </head>
 <body>
+<div id="trade-popup" class="trade-popup hidden">
+  <div class="trade-popup-inner">
+    <div id="popup-header" class="popup-header"></div>
+    <div id="popup-symbol" class="popup-symbol"></div>
+    <div id="popup-details" class="popup-details"></div>
+    <div id="popup-pnl" class="popup-pnl"></div>
+  </div>
+</div>
 <canvas id="starfield"></canvas>
 <div id="killswitch-banner">🚨 KILL SWITCH ACTIVE — all trading halted</div>
 <header>
@@ -508,8 +530,48 @@ function updateForcedPanel(d){
     tbody.appendChild(tr);});
 }
 
+function handleTradeEvent(event){
+  const popup=document.getElementById('trade-popup');
+  const header=document.getElementById('popup-header');
+  const symbol=document.getElementById('popup-symbol');
+  const details=document.getElementById('popup-details');
+  const pnl=document.getElementById('popup-pnl');
+
+  if(event.type==='TRADE_OPENED'){
+    popup.style.borderLeftColor='#00d4ff';
+    header.textContent='⚡ Trade Opened';
+    symbol.textContent=event.symbol;
+    details.innerHTML=`Entry ₹${Number(event.entry||0).toLocaleString('en-IN')}<br>`+
+      `Stop ₹${Number(event.stop||0).toLocaleString('en-IN')} · `+
+      `Target ₹${Number(event.target||0).toLocaleString('en-IN')}`;
+    pnl.textContent='';
+    pnl.className='popup-pnl';
+  }else if(event.type==='TRADE_CLOSED'){
+    const won=event.outcome==='WIN';
+    popup.style.borderLeftColor=won?'#10b981':'#ef4444';
+    header.textContent=won?'✅ Trade Closed — WIN':'❌ Trade Closed — LOSS';
+    symbol.textContent=event.symbol;
+    details.innerHTML=`${event.trade_type||''}`;
+    const sign=(event.pnl_pct||0)>=0?'+':'';
+    pnl.textContent=`${sign}${(event.pnl_pct||0).toFixed(1)}%`;
+    pnl.className=`popup-pnl ${won?'win':'loss'}`;
+  }else{
+    return;
+  }
+
+  requestAnimationFrame(()=>{
+    popup.classList.remove('hidden');
+    popup.classList.add('visible');
+  });
+  setTimeout(()=>{
+    popup.classList.remove('visible');
+    setTimeout(()=>{popup.classList.add('hidden');},400);
+  },5000);
+}
+
 function updateDashboard(d){
   if(d.error){document.getElementById('conn').textContent='● error';return;}
+  if(d.event){handleTradeEvent(d.event);}
   lastData=d;
   document.getElementById('mode').textContent=d.mode||'—';
   document.getElementById('owner').textContent=d.owner||'Trader';

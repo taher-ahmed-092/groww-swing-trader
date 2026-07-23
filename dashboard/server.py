@@ -265,6 +265,28 @@ def collect_dashboard_data() -> dict:
         return {"error": str(exc), "timestamp": datetime.now(IST).isoformat()}
 
 
+async def broadcast_trade_event(event_type: str, trade: dict) -> None:
+    """Broadcasts a trade event to all connected dashboard clients, on top of
+    a full dashboard snapshot (updateDashboard() assumes every message carries
+    the full payload — an event-only message would crash it on missing keys).
+
+    event_type: "TRADE_OPENED" | "TRADE_CLOSED"
+    """
+    data = collect_dashboard_data()
+    data["event"] = {
+        "type": event_type,
+        "symbol": trade.get("symbol", ""),
+        "entry": trade.get("entry", 0),
+        "stop": trade.get("stop", 0),
+        "target": trade.get("target", 0),
+        "outcome": trade.get("outcome", ""),
+        "pnl_pct": trade.get("pnl_pct", 0),
+        "trade_type": trade.get("trade_type", ""),
+        "timestamp": datetime.now(IST).isoformat(),
+    }
+    await manager.broadcast(data)
+
+
 @app.get("/dashboard/{token}", response_class=HTMLResponse)
 async def serve_dashboard(token: str):
     if not verify_token(token):

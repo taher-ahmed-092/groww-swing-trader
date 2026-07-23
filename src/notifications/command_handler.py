@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -48,7 +50,8 @@ class CommandHandler:
             "/pairs": self._pairs, "/mode": self._mode, "/conserve": self._conserve,
             "/balanced": self._balanced, "/rogue": self._rogue,
             "/learning": self._learning, "/forced": self._forced,
-            "/force_now": self._force_now,
+            "/force_now": self._force_now, "/report": self._handle_report,
+            "/lessons_file": self._handle_lessons_file,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -562,6 +565,146 @@ class CommandHandler:
     def _rogue(self, args):
         """eager — low bar, trades downtrends"""
         self._set_mode_cmd("rogue")
+
+    def _handle_report(self, args):
+        """full dashboard snapshot in one message"""
+        import json
+        from pathlib import Path
+
+        from src.analytics.performance import PerformanceAnalyzer
+        from src.data.regime_detector import RegimeDetector
+        from src.learning.historical_replay import HistoricalReplayEngine
+        from src.memory.journal import TradingJournal
+        from src.trading.always_on_trader import AlwaysOnTrader
+        from src.data.watchlist import ALL_STOCKS
+
+        j = TradingJournal()
+        pa = PerformanceAnalyzer()
+        summary = pa.get_summary()
+        regime = RegimeDetector().detect()
+        forced = AlwaysOnTrader().get_todays_summary()
+        try:
+            replay = HistoricalReplayEngine().get_stats()
+        except Exception:
+            replay = {}
+        kb = j.get_active_knowledge(min_confidence=0.0)
+
+        forced_file = Path("data/cache/forced_trades_history.json")
+        forced_all = []
+        if forced_file.exists():
+            try:
+                forced_all = json.loads(forced_file.read_text())
+            except Exception:
+                pass
+        forced_wins_all = sum(1 for t in forced_all if t.get("outcome") == "WIN")
+        forced_total_all = len(forced_all)
+        forced_wr_all = round(forced_wins_all / forced_total_all * 100, 1) if forced_total_all else 0
+
+        sim_file = Path("data/cache/intraday_sim_history.json")
+        sim_all = []
+        if sim_file.exists():
+            try:
+                sim_all = json.loads(sim_file.read_text())
+            except Exception:
+                pass
+        sim_wins = sum(1 for t in sim_all if t.get("outcome") == "WIN")
+        sim_total = len(sim_all)
+        sim_wr = round(sim_wins / sim_total * 100, 1) if sim_total else 0
+
+        top_kb = sorted(kb, key=lambda e: -e.confidence)[:3]
+        kb_lines = []
+        for e in top_kb:
+            icon = "✅" if "WON" in e.pattern_description else "❌"
+            conf = round(e.confidence * 100)
+            desc = e.pattern_description[:55]
+            kb_lines.append(f"  {icon} [{conf}%] {desc}")
+        kb_text = "\n".join(kb_lines) or "  Still building..."
+
+        regime_emoji_map = {
+            "BULL_TRENDING": "🐂", "BEAR_TRENDING": "🐻", "VOLATILE": "⚡",
+            "RANGE_BOUND": "↔️", "RECOVERY": "🌱", "TRANSITIONAL": "🌀", "UNKNOWN": "❓",
+        }
+        regime_name = regime.get("regime", "UNKNOWN")
+        regime_emoji = regime_emoji_map.get(regime_name, "❓")
+        nifty = regime.get("nifty_price") or 0
+        rsi = regime.get("rsi") or 0
+
+        total_learning = forced_total_all + sim_total
+        xgb_pct = min(100, round(total_learning / 30 * 100))
+        xgb_bar = "█" * (xgb_pct // 10) + "░" * (10 - xgb_pct // 10)
+
+        msg = (
+            "📊 *FULL SYSTEM REPORT*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+            "*🌍 Market*\n"
+            f"{regime_emoji} {regime_name}\n"
+            f"Nifty ₹{nifty:,.0f} · RSI {rsi:.1f}\n"
+            f"Advice: {str(regime.get('strategy', ''))[:60]}\n\n"
+
+            "*📈 Real Pipeline Trades*\n"
+            f"Total: {summary.get('total_trades', 0)}\n"
+            f"Win rate: {summary.get('win_rate', 0) * 100:.1f}%\n"
+            f"P&L: ₹{summary.get('total_pnl_inr', 0):+.2f}\n\n"
+
+            "*⚡ Forced Learning (Today)*\n"
+            f"{forced['wins']}W / {forced['losses']}L from {forced['total']} trades\n"
+            f"Win rate: {forced['win_rate']:.0f}%\n\n"
+
+            "*⚡ Forced Learning (All Time)*\n"
+            f"{forced_wins_all}W / {forced_total_all - forced_wins_all}L "
+            f"from {forced_total_all} trades\n"
+            f"Win rate: {forced_wr_all:.0f}%\n\n"
+
+            "*🔬 Intraday Simulations*\n"
+            f"{sim_wins}W / {sim_total - sim_wins}L from {sim_total} sims\n"
+            f"Win rate: {sim_wr:.0f}%\n\n"
+
+            "*🧠 Knowledge Base*\n"
+            f"{len(kb)} patterns learned\n"
+            f"Replay coverage: {replay.get('total_stocks_replayed', 0)}/{len(ALL_STOCKS)}\n"
+            f"Top patterns:\n{kb_text}\n\n"
+
+            "*🤖 XGBoost Model*\n"
+            f"{xgb_bar} {xgb_pct}%\n"
+            f"Needs {max(0, 30 - total_learning)} more trades\n\n"
+
+            "*💡 What to Improve*\n"
+            f"{self._generate_improvement_tip(summary, forced, sim_wr, regime_name)}\n\n"
+
+            f"_Updated: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%d %b %H:%M IST')}_"
+        )
+        self._send(msg)
+
+    def _generate_improvement_tip(self, summary, forced, sim_wr, regime):
+        """Generates one honest improvement suggestion."""
+        total = summary.get("total_trades", 0)
+        forced_wr = forced.get("win_rate", 0)
+
+        if total == 0:
+            return ("No real pipeline trades yet. The system is building knowledge. "
+                    "Run /scan daily to find real opportunities.")
+        if forced_wr < 35:
+            return ("Forced trade win rate is low — market is volatile. This is expected. "
+                    "Keep accumulating data. Win rate improves as KB grows.")
+        if regime == "VOLATILE":
+            return ("Market is volatile. System correctly using 50% position size. "
+                    "Wait for RECOVERY or BULL_TRENDING before expecting higher WR.")
+        if sim_wr > 55:
+            return ("Intraday sim win rate is strong. The pipeline signals are working. "
+                    "Run /scan to capture real paper trades.")
+        return ("System is learning. Keep it running daily. After 30 total trades, "
+                "XGBoost activates and prediction quality improves significantly.")
+
+    def _handle_lessons_file(self, args):
+        """sends the current LESSONS.md"""
+        lf = Path("LESSONS.md")
+        if not lf.exists():
+            from src.memory.lessons_writer import LessonsWriter
+
+            LessonsWriter().write()
+        content = lf.read_text()[:3000]
+        self._send(f"```\n{content}\n```")
 
     def _pairs(self, args):
         """pairs opportunities"""

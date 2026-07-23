@@ -534,6 +534,17 @@ def deep_replay_job() -> None:
 
     result = HistoricalReplayEngine().run_batch(n_stocks=50, n_days_each=15)
     console.print(f"[cyan][JOB] deep replay: {result}[/cyan]")
+    daily_lessons_job()
+
+
+def daily_lessons_job() -> None:
+    """11:00 PM IST (also called after deep_replay_job) — refresh LESSONS.md."""
+    if _kill_switch():
+        return
+    from src.memory.lessons_writer import LessonsWriter
+
+    path = LessonsWriter().write()
+    console.print(f"[cyan][JOB] LESSONS.md updated: {path}[/cyan]")
 
 
 _LAST_FORCED_NOTIFY = Path("data/cache/last_forced_notify.txt")
@@ -558,6 +569,19 @@ def _mark_notified_forced() -> None:
         pass
 
 
+def _broadcast_trade_event_safe(event_type: str, trade: dict) -> None:
+    """Push a live trade event to the dashboard. No-op if the dashboard process
+    isn't running — this runner and the dashboard are separate processes."""
+    try:
+        import asyncio
+
+        from dashboard.server import broadcast_trade_event
+
+        asyncio.run(broadcast_trade_event(event_type, trade))
+    except Exception:
+        pass
+
+
 def forced_trade_job() -> None:
     """Every 15 minutes, all day, 24/7 — place forced learning trades. No hour
     restriction: market hours score+place live candidates, off-hours run
@@ -570,6 +594,7 @@ def forced_trade_job() -> None:
     for t in trades:
         console.print(f"[cyan][FORCED] {t['symbol']} entry=₹{t['entry']:.2f} "
                       f"stop=₹{t['stop']:.2f} score={t['signal_score']:.2f}[/cyan]")
+        _broadcast_trade_event_safe("TRADE_OPENED", t)
     if trades and _should_notify_forced():
         lines = [f"⚡ *{len(trades)} learning trades*"]
         for t in trades:
@@ -590,6 +615,8 @@ def forced_close_job() -> None:
         wins = sum(1 for t in closed if t["outcome"] == "WIN")
         console.print(f"[cyan][FORCED CLOSE] {len(closed)} trades: "
                       f"{wins}W/{len(closed) - wins}L[/cyan]")
+        for t in closed:
+            _broadcast_trade_event_safe("TRADE_CLOSED", t)
 
 
 def daily_forced_summary_job() -> None:
@@ -647,6 +674,7 @@ if __name__ == "__main__":
     scheduler.add_job(hourly_health_job, "cron", minute=0)
     scheduler.add_job(off_hours_replay_job, "cron", hour="*/2", minute=15)
     scheduler.add_job(deep_replay_job, "cron", hour=23, minute=30)
+    scheduler.add_job(daily_lessons_job, "cron", hour=23, minute=0)
     scheduler.add_job(forced_trade_job, "cron", minute="*/15")
     scheduler.add_job(forced_close_job, "cron", minute="7,22,37,52")
     scheduler.add_job(daily_forced_summary_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
