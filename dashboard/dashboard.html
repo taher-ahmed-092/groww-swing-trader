@@ -64,6 +64,20 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 .panel{background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid var(--panel-border);
   border-radius:20px;padding:20px}
 
+/* ── Scoreboard ── */
+.scoreboard{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--panel-border);
+  border-radius:16px;overflow:hidden;margin:16px 0 24px}
+@media(max-width:600px){.scoreboard{grid-template-columns:repeat(2,1fr)}}
+.sb-tile{background:var(--panel-bg);backdrop-filter:blur(16px);padding:20px 16px;text-align:center}
+.sb-tile--win{border-top:3px solid var(--green)}
+.sb-tile--loss{border-top:3px solid var(--red)}
+.sb-num{font-family:var(--font-display);font-size:clamp(28px,5vw,48px);font-weight:800;
+  color:var(--text);line-height:1}
+.sb-tile--win .sb-num{color:var(--green)}
+.sb-tile--loss .sb-num{color:var(--red)}
+.sb-label{font-family:var(--font-body);font-size:11px;letter-spacing:2px;
+  color:var(--text-muted);margin-top:6px}
+
 /* ── Room 1: Mission Control ── */
 .hud-strip{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-bottom:20px}
 .hud-strip .regime-emoji{font-size:36px}
@@ -197,6 +211,25 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 <section class="room" id="room-1">
   <div class="room__title">Welcome back, <span id="owner">__OWNER_NAME__</span>! 👋</div>
   <div class="room__sub">Mission Control · your AI trading system, live</div>
+
+  <div class="scoreboard" id="scoreboard">
+    <div class="sb-tile">
+      <div class="sb-num" id="sb-total">0</div>
+      <div class="sb-label">TRADES TAKEN</div>
+    </div>
+    <div class="sb-tile sb-tile--win">
+      <div class="sb-num" id="sb-won">0</div>
+      <div class="sb-label">✅ WON</div>
+    </div>
+    <div class="sb-tile sb-tile--loss">
+      <div class="sb-num" id="sb-lost">0</div>
+      <div class="sb-label">❌ LOST</div>
+    </div>
+    <div class="sb-tile">
+      <div class="sb-num" id="sb-wr">0%</div>
+      <div class="sb-label">WIN RATE</div>
+    </div>
+  </div>
 
   <div class="panel hud-strip">
     <span class="regime-emoji" id="regime-emoji">🚀</span>
@@ -724,6 +757,17 @@ function updateDashboard(d){
     adaptive=d.adaptive_thresholds||{},regimeData=d.regime||{},intra=d.intraday_sim||{};
 
   document.getElementById('owner').textContent=d.owner||OWNER;
+
+  const ct=d.combined_totals||{};
+  countUp(document.getElementById('sb-total'),ct.total||0,800);
+  countUp(document.getElementById('sb-won'),ct.won||0,800);
+  countUp(document.getElementById('sb-lost'),ct.lost||0,800);
+  const wrEl=document.getElementById('sb-wr');
+  if(wrEl){
+    const wr=ct.win_rate||0;
+    wrEl.textContent=wr.toFixed(1)+'%';
+    wrEl.style.color=wr>=55?'var(--green)':wr>=45?'var(--gold)':'var(--red)';
+  }
 
   countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
   countUp(document.getElementById('metric-wr'),s.win_rate||0,1200,'','%',1);

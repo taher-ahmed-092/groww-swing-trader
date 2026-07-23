@@ -168,7 +168,31 @@ def _load_all_trade_history(journal: TradingJournal) -> list[dict]:
                 pass
 
     merged.sort(key=lambda x: x.get("closed_at", "") or "")
-    return merged[-60:]  # last 60 across all sources
+    return merged
+
+
+def _combined_totals(all_trades: list[dict]) -> dict:
+    """Running total across every source — real + forced + intraday + short —
+    so the user sees ALL trades taken, not just the real pipeline's."""
+    total_taken = len(all_trades)
+    total_won = sum(1 for t in all_trades if t.get("outcome") == "WIN")
+    total_lost = sum(1 for t in all_trades if t.get("outcome") == "LOSS")
+    overall_wr = round(total_won / total_taken * 100, 1) if total_taken else 0
+
+    by_source: dict = {}
+    for t in all_trades:
+        src = t.get("source", "unknown")
+        by_source.setdefault(src, {"total": 0, "won": 0, "lost": 0})
+        by_source[src]["total"] += 1
+        if t.get("outcome") == "WIN":
+            by_source[src]["won"] += 1
+        if t.get("outcome") == "LOSS":
+            by_source[src]["lost"] += 1
+
+    return {
+        "total": total_taken, "won": total_won, "lost": total_lost,
+        "win_rate": overall_wr, "by_source": by_source,
+    }
 
 
 def collect_dashboard_data() -> dict:
@@ -195,7 +219,9 @@ def collect_dashboard_data() -> dict:
                 "days_held": (datetime.now() - t.executed_at).days if t.executed_at else 0,
             })
 
-        pnl_history = _load_all_trade_history(journal)
+        all_trades = _load_all_trade_history(journal)
+        pnl_history = all_trades[-60:]  # last 60 across all sources, for the chart
+        combined_totals = _combined_totals(all_trades)
         wl_chart = [{"outcome": t.outcome, "symbol": t.symbol}
                     for t in recent if t.outcome in ("WIN", "LOSS")]
 
@@ -310,6 +336,7 @@ def collect_dashboard_data() -> dict:
             "forced_trades": forced_summary,
             "learning_metrics": learning_metrics,
             "adaptive_thresholds": adaptive_data,
+            "combined_totals": combined_totals,
             "funny_line": funny_line,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }

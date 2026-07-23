@@ -52,7 +52,7 @@ class CommandHandler:
             "/learning": self._learning, "/forced": self._forced,
             "/force_now": self._force_now, "/report": self._handle_report,
             "/lessons_file": self._handle_lessons_file,
-            "/thresholds": self._handle_thresholds,
+            "/thresholds": self._handle_thresholds, "/totals": self._handle_totals,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -709,6 +709,76 @@ class CommandHandler:
                 "markets (ADX<15). Run /scan at 10AM IST for best results.")
 
         return "\n".join(lines) if lines else "System is performing as expected."
+
+    def _handle_totals(self, args):
+        """trade totals across all sources"""
+        import json
+        from pathlib import Path
+
+        from src.memory.journal import TradingJournal
+
+        merged = []
+        for fname, source in (
+            ("data/cache/forced_trades_history.json", "Forced"),
+            ("data/cache/intraday_sim_history.json", "Intraday"),
+            ("data/cache/short_trades_history.json", "Short"),
+        ):
+            p = Path(fname)
+            if p.exists():
+                try:
+                    for t in json.loads(p.read_text()):
+                        if t.get("outcome") in ("WIN", "LOSS"):
+                            merged.append({
+                                "source": source, "outcome": t["outcome"],
+                                "symbol": t.get("symbol", "?"), "pnl": t.get("pnl_pct", 0) or 0,
+                            })
+                except Exception:
+                    pass
+
+        j = TradingJournal()
+        for t in j.get_recent(n=200):
+            if t.outcome in ("WIN", "LOSS"):
+                merged.append({
+                    "source": "Real", "outcome": t.outcome,
+                    "symbol": t.symbol, "pnl": t.pnl_pct or 0,
+                })
+
+        total = len(merged)
+        won = sum(1 for t in merged if t["outcome"] == "WIN")
+        lost = total - won
+        wr = round(won / total * 100, 1) if total else 0
+
+        by_source = {}
+        for t in merged:
+            s = t["source"]
+            by_source.setdefault(s, {"total": 0, "won": 0, "lost": 0, "pnl": 0})
+            by_source[s]["total"] += 1
+            if t["outcome"] == "WIN":
+                by_source[s]["won"] += 1
+            else:
+                by_source[s]["lost"] += 1
+            by_source[s]["pnl"] += t["pnl"]
+
+        bar_won = "█" * round(wr / 10) + "░" * (10 - round(wr / 10))
+
+        lines = [
+            "📊 *TRADE TOTALS — ALL SOURCES*",
+            "━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"Total taken: *{total}*",
+            f"Won: *{won}* ✅   Lost: *{lost}* ❌",
+            f"Win rate: *{wr}%*  {bar_won}",
+            "",
+            "*By source:*",
+        ]
+        for src, stats in sorted(by_source.items()):
+            src_wr = round(stats["won"] / stats["total"] * 100) if stats["total"] else 0
+            avg_pnl = stats["pnl"] / stats["total"] if stats["total"] else 0
+            lines.append(
+                f"{src}: {stats['total']} trades ({stats['won']}W/{stats['lost']}L) "
+                f"{src_wr}% WR  avg {avg_pnl:+.1f}%"
+            )
+
+        self._send("\n".join(lines))
 
     def _handle_thresholds(self, args):
         """adaptive judge thresholds by regime"""
