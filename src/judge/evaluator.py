@@ -122,9 +122,9 @@ class LLMJudge:
         except Exception:
             regime = "UNKNOWN"
         adaptive_threshold = AdaptiveThresholds().get_judge_threshold(regime)
-        threshold = max(
-            mode.judge_threshold - 0.5,
-            min(mode.judge_threshold + 1.5, adaptive_threshold))
+        threshold = round(max(
+            mode.judge_threshold - 1.5,
+            min(mode.judge_threshold + 1.5, adaptive_threshold)), 2)
 
         if settings.effective_demo_mode:
             fund = fundamental.get("score", 0) or 0

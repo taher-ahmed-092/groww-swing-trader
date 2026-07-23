@@ -4,477 +4,506 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Cosmic Punk — Trading Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=Space+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@studio-freight/lenis@1.0.42/dist/lenis.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.min.js"></script>
 <style>
-  :root{
-    --bg:#040404;--surface:rgba(255,255,255,0.03);--surface2:rgba(255,255,255,0.05);
-    --accent:#c9a84c;--accent2:#00d4ff;
-    --green:#10b981;--red:#ef4444;--yellow:#f5d78e;
-    --text:#e8e4dc;--muted:#6b6560;--border:rgba(255,255,255,0.08);
-    --font-hero:Georgia,'Times New Roman',serif;
-    --font-body:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
-    --font-mono:'Courier New',monospace;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font-family:var(--font-body);
-    padding-bottom:60px;overflow-x:hidden}
-  .mono{font-family:var(--font-mono)}
+:root{
+  --bg:#040404;--surface:rgba(255,255,255,0.03);--surface2:rgba(255,255,255,0.06);
+  --gold:#c9a84c;--gold-light:#f5d78e;--cyan:#00d4ff;--green:#10b981;--red:#ef4444;
+  --text:#e8e4dc;--muted:#6b6560;--border:rgba(201,168,76,0.15);
+  --font-hero:'Cinzel',serif;--font-body:'Cormorant Garamond',serif;
+  --font-data:'Space Grotesk',sans-serif;--font-mono:'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--font-body);overflow-x:hidden}
+@media(hover:hover){body{cursor:none}}
 
-  /* ── starfield ── */
-  #starfield{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none}
-  header,.chapter,.ticker-wrap,#killswitch-banner{position:relative;z-index:1}
+/* preloader */
+.preloader{position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;
+  align-items:center;justify-content:center;transition:opacity .8s ease}
+.preloader.done{opacity:0;pointer-events:none}
+.preloader__inner{text-align:center}
+.preloader__kicker{font-family:var(--font-data);font-size:11px;letter-spacing:3px;
+  color:var(--muted);margin-bottom:24px}
+.preloader__count{font-family:var(--font-hero);font-size:clamp(80px,15vw,180px);
+  color:var(--gold);line-height:1}
+.preloader__bar{width:200px;height:1px;background:var(--border);margin:24px auto;overflow:hidden}
+.preloader__bar span{display:block;height:100%;background:var(--gold);width:0%;transition:width .1s linear}
+.preloader__sub{font-family:var(--font-data);font-size:10px;letter-spacing:4px;color:var(--muted)}
 
-  /* ── header ── */
-  header{position:sticky;top:0;z-index:20;background:rgba(4,4,4,.85);backdrop-filter:blur(10px);
-    border-bottom:1px solid var(--border);padding:14px 24px;display:flex;justify-content:space-between;
-    align-items:center;flex-wrap:wrap;gap:10px}
-  header h1{font-family:var(--font-hero);font-size:15px;letter-spacing:3px;color:var(--accent);
-    text-transform:uppercase;font-weight:400}
-  .mode-badge{padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;
-    background:var(--surface2);border:1px solid var(--border);letter-spacing:.5px}
-  .pulse-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);
-    margin-right:6px;animation:livePulse 2s ease-in-out infinite}
-  @keyframes livePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
-  #live-clock{color:var(--muted);font-size:12px;font-family:var(--font-mono)}
-  #conn{font-size:10px;color:var(--muted);letter-spacing:.5px}
+/* webgl stage */
+#stage{position:fixed;inset:0;z-index:0;pointer-events:none}
 
-  /* ── ticker ── */
-  .ticker-wrap{background:rgba(201,168,76,.04);border-top:1px solid rgba(201,168,76,.15);
-    border-bottom:1px solid rgba(201,168,76,.15);overflow:hidden;padding:7px 0}
-  .ticker{display:inline-flex;gap:40px;animation:ticker-scroll 60s linear infinite;white-space:nowrap}
-  @keyframes ticker-scroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
-  .ticker-item{font-size:12px;font-family:var(--font-mono);color:var(--accent)}
-  .ticker-item.up{color:var(--green)}.ticker-item.down{color:var(--red)}
+/* grain + vignette */
+.grain{position:fixed;inset:-50%;z-index:1;pointer-events:none;width:200%;height:200%;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E");
+  animation:grainMove .5s steps(1) infinite;opacity:.4}
+@keyframes grainMove{0%{transform:translate(0,0)}25%{transform:translate(-3%,-3%)}
+  50%{transform:translate(3%,3%)}75%{transform:translate(-3%,3%)}100%{transform:translate(3%,-3%)}}
+.vignette{position:fixed;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 40%,rgba(0,0,0,.7) 100%)}
 
-  /* ── chapters (scroll reveal) ── */
-  .chapter{max-width:1100px;margin:0 auto;padding:80px 24px;opacity:0;
-    transform:translateY(40px);transition:opacity .8s ease,transform .8s ease}
-  .chapter.revealed{opacity:1;transform:translateY(0)}
-  .chapter-label{font-family:var(--font-mono);font-size:11px;letter-spacing:3px;color:var(--muted);
-    text-transform:uppercase;margin-bottom:16px}
-  .chapter-title{font-family:var(--font-hero);font-size:clamp(28px,4vw,44px);font-weight:400;
-    color:var(--text);margin-bottom:24px;letter-spacing:-.5px}
+/* cursor */
+.cursor{position:fixed;z-index:9998;pointer-events:none;mix-blend-mode:difference}
+.cursor__dot{width:6px;height:6px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);
+  position:fixed;transition:transform .1s ease}
+.cursor__ring{position:fixed;width:32px;height:32px;border:1px solid rgba(255,255,255,.4);
+  border-radius:50%;transform:translate(-50%,-50%)}
+@media(max-width:768px){.cursor{display:none}}
 
-  /* ── Chapter I: hero ── */
-  #chapter-1{min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding-top:40px}
-  .hero-greeting{font-family:var(--font-hero);font-size:clamp(32px,6vw,64px);font-weight:400;
-    color:var(--text);letter-spacing:-1px;line-height:1.1}
-  .hero-greeting .name{color:var(--accent)}
-  .hero-sub{font-family:var(--font-body);font-size:clamp(14px,2vw,18px);color:var(--muted);
-    margin-top:14px;letter-spacing:.3px}
-  @keyframes textReveal{from{clip-path:inset(0 100% 0 0);opacity:0}to{clip-path:inset(0 0% 0 0);opacity:1}}
-  .hero-text{animation:textReveal 1.2s cubic-bezier(0.77,0,0.18,1) forwards}
+/* header + ticker */
+.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;
+  justify-content:space-between;padding:16px 32px;border-bottom:1px solid var(--border);
+  background:rgba(4,4,4,.8);backdrop-filter:blur(20px)}
+.site-head__mark{font-family:var(--font-hero);font-size:14px;letter-spacing:2px;color:var(--gold)}
+.site-head__mark em{font-family:var(--font-body);font-style:italic;color:var(--text)}
+.site-head__clock{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+.site-head__market{display:flex;align-items:center;gap:8px;font-family:var(--font-data);
+  font-size:11px;letter-spacing:2px}
+.market-dot{width:6px;height:6px;border-radius:50%}
+.market-dot.open{background:var(--green);animation:pulse 1.5s ease-in-out infinite;box-shadow:0 0 6px var(--green)}
+.market-dot.closed{background:var(--muted)}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(1.3)}}
+.ticker-wrap{position:fixed;top:57px;left:0;right:0;z-index:99;overflow:hidden;
+  background:rgba(4,4,4,.6);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);padding:5px 0}
+.ticker{display:inline-flex;gap:48px;animation:tickerScroll 60s linear infinite;white-space:nowrap;
+  font-family:var(--font-mono);font-size:11px;color:var(--gold);letter-spacing:1px}
+@keyframes tickerScroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
 
-  .metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:56px}
-  .metric-card{background:var(--surface);border:1px solid var(--border);border-top:2px solid var(--accent);
-    border-radius:2px;padding:22px 18px;opacity:0;transform:translateY(24px);
-    transition:opacity .6s ease,transform .6s ease}
-  .chapter.revealed .metric-card{opacity:1;transform:translateY(0)}
-  .chapter.revealed .metric-card:nth-child(1){transition-delay:.1s}
-  .chapter.revealed .metric-card:nth-child(2){transition-delay:.2s}
-  .chapter.revealed .metric-card:nth-child(3){transition-delay:.3s}
-  .chapter.revealed .metric-card:nth-child(4){transition-delay:.4s}
-  .metric-number{font-family:var(--font-hero);font-size:clamp(24px,3vw,36px);font-weight:400;
-    color:var(--accent);animation:goldShimmer 3s ease infinite}
-  @keyframes goldShimmer{0%{color:#c9a84c}50%{color:#f5d78e;text-shadow:0 0 20px #c9a84c44}100%{color:#c9a84c}}
-  .metric-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-top:8px}
+/* rail */
+.rail{position:fixed;left:24px;top:50%;transform:translateY(-50%);z-index:100;
+  display:flex;flex-direction:column;gap:16px}
+.rail__dot{display:flex;align-items:center;gap:10px;text-decoration:none}
+.rail__dot span{display:flex;align-items:center;justify-content:center;width:24px;height:24px;
+  border:1px solid var(--border);border-radius:50%;font-family:var(--font-hero);font-size:8px;
+  color:var(--muted);transition:all .3s ease}
+.rail__dot i{font-style:normal;font-family:var(--font-data);font-size:9px;letter-spacing:1px;
+  color:var(--muted);opacity:0;transform:translateX(-4px);transition:all .3s ease;white-space:nowrap}
+.rail__dot:hover i,.rail__dot.active i{opacity:1;transform:translateX(0)}
+.rail__dot.active span{border-color:var(--gold);color:var(--gold);box-shadow:0 0 10px rgba(201,168,76,.3)}
+@media(max-width:900px){.rail{display:none}}
 
-  /* ── Chapter II: intelligence ── */
-  .intel-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:40px;align-items:center}
-  .regime-hero{font-family:var(--font-hero);font-size:clamp(40px,7vw,88px);font-weight:400;
-    letter-spacing:-2px;line-height:1;color:var(--text)}
-  .regime-emoji{font-size:0.6em;margin-right:12px}
-  .regime-advice{font-family:var(--font-hero);font-style:italic;font-size:16px;color:var(--muted);
-    margin-top:20px;line-height:1.5}
-  .gauge-wrap{display:flex;flex-direction:column;align-items:center;gap:10px}
-  .circle{transform:rotate(-90deg)}
-  #chapter-2 .intel-grid>div:first-child{opacity:0;transform:translateX(-40px);transition:opacity .9s ease,transform .9s ease}
-  #chapter-2 .intel-grid>div:last-child{opacity:0;transform:translateX(40px);transition:opacity .9s ease .15s,transform .9s ease .15s}
-  #chapter-2.revealed .intel-grid>div{opacity:1;transform:translateX(0)}
+/* chapters */
+.chapter{position:relative;z-index:2;min-height:100vh;padding:120px 80px 80px;
+  max-width:1100px;margin:0 auto}
+@media(max-width:768px){.chapter{padding:100px 24px 60px}.site-head{padding:12px 20px}}
+.mask{overflow:hidden;display:block}
+.line{display:block}
+.reveal{opacity:0}
 
-  /* ── Chapter III: positions ── */
-  .pos{background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:18px 20px;
-    margin-bottom:12px;animation:slideInRight .5s ease}
-  .pos.new{box-shadow:0 0 24px rgba(201,168,76,.35)}
-  @keyframes slideInRight{from{transform:translateX(100px);opacity:0}to{transform:translateX(0);opacity:1}}
-  .pos .top{display:flex;justify-content:space-between;align-items:center}
-  .pos .sym{font-family:var(--font-hero);font-size:22px;font-weight:400}
-  .badge{font-size:10px;padding:2px 10px;border-radius:2px;background:var(--surface2);
-    border:1px solid var(--border);color:var(--accent2);letter-spacing:.5px}
-  .bar{height:6px;background:rgba(255,255,255,.05);border-radius:4px;margin-top:10px;overflow:hidden}
-  .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent))}
-  .empty-hero{font-family:var(--font-hero);font-style:italic;font-size:clamp(20px,3vw,32px);
-    color:var(--muted);text-align:center;padding:60px 0}
+/* hero */
+.hero{text-align:center;padding-top:80px}
+.kicker{font-family:var(--font-data);font-size:11px;letter-spacing:4px;color:var(--muted);margin-bottom:32px}
+.hero__title{font-family:var(--font-hero);font-size:clamp(40px,8vw,110px);font-weight:900;
+  line-height:1;letter-spacing:-2px;margin-bottom:48px}
+.hero__name{color:var(--gold);font-style:normal}
+.line--italic{font-family:var(--font-body);font-style:italic;font-weight:300;
+  font-size:clamp(28px,5vw,70px);color:var(--muted)}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:64px;border:1px solid var(--border)}
+@media(max-width:768px){.metrics{grid-template-columns:repeat(2,1fr)}}
+.metric{padding:32px 24px;text-align:center;border-right:1px solid var(--border);background:var(--surface)}
+.metric:last-child{border-right:none}
+.metric__num{font-family:var(--font-hero);font-size:clamp(28px,4vw,52px);color:var(--text);margin-bottom:8px}
+.metric__num--gold{color:var(--gold)}
+.metric__label{font-family:var(--font-data);font-size:9px;letter-spacing:3px;color:var(--muted)}
+.scroll-cue{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:80px;
+  font-family:var(--font-data);font-size:9px;letter-spacing:4px;color:var(--muted)}
+.scroll-cue__line{width:1px;height:60px;background:linear-gradient(var(--gold),transparent);
+  animation:scrollCuePulse 2s ease-in-out infinite}
+@keyframes scrollCuePulse{0%,100%{opacity:.4}50%{opacity:1}}
 
-  /* ── Chapter IV: record ── */
-  .wl-dot{display:inline-block;width:14px;height:14px;border-radius:50%;margin:2px;animation:fadeInUp .3s both}
-  @keyframes fadeInUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.chapter__head{margin-bottom:64px}
+.chapter__title{font-family:var(--font-hero);font-size:clamp(32px,5vw,68px);font-weight:700;margin:8px 0 24px}
+.lede{font-family:var(--font-body);font-size:clamp(16px,2vw,22px);color:var(--muted);
+  font-style:italic;max-width:600px}
 
-  /* ── Chapter V: knowledge ── */
-  .knowledge-entry{padding:10px 0;border-bottom:1px solid var(--border);font-family:var(--font-mono);
-    font-size:13px;display:flex;align-items:center;gap:12px}
-  .knowledge-entry .conf{color:var(--accent);min-width:44px;font-size:11px}
-  .knowledge-entry.win{color:var(--green)}.knowledge-entry.loss{color:var(--muted)}
+/* intelligence */
+.intelligence{display:grid;grid-template-columns:1fr 200px;gap:32px;align-items:start}
+@media(max-width:700px){.intelligence{grid-template-columns:1fr}}
+.regime-emoji{font-size:56px;margin-bottom:8px}
+.regime-name{font-family:var(--font-hero);font-size:clamp(28px,4vw,58px);color:var(--gold);letter-spacing:2px}
+.rsi-gauge{grid-column:2;width:160px}
+@media(max-width:700px){.rsi-gauge{grid-column:1;margin:0 auto}}
+.strategy-rec{font-size:19px;color:var(--muted);max-width:500px;margin-top:16px}
+.nifty-price{display:flex;align-items:baseline;gap:16px;margin-top:20px}
+.nifty-label{font-family:var(--font-data);font-size:10px;letter-spacing:3px;color:var(--muted)}
+.nifty-num{font-family:var(--font-hero);font-size:clamp(24px,3vw,44px);color:var(--text)}
 
-  /* ── Chapter VI: learning engine ── */
-  .learn-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
-  .learn-col{border-left:1px solid var(--border);padding-left:20px}
-  .learn-col .num{font-family:var(--font-hero);font-size:32px;color:var(--accent)}
-  .learn-col .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-top:4px}
-  .progress-track{background:var(--surface2);border-radius:2px;height:6px;overflow:hidden;margin-top:16px}
-  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));
-    border-radius:2px;transition:width 1.5s cubic-bezier(.4,0,.2,1)}
-  .mini-table{width:100%;font-size:12px;border-collapse:collapse;margin-top:16px}
-  .mini-table th{color:var(--muted);text-align:left;padding:4px 8px;font-weight:400;font-size:10px;
-    text-transform:uppercase;letter-spacing:.5px}
-  .mini-table td{padding:5px 8px;border-top:1px solid var(--border)}
-  .win-sim{color:var(--green)}.loss-sim{color:var(--red)}
+/* positions */
+.positions{display:flex;flex-direction:column;gap:1px}
+.position-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);
+  padding:22px 28px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;margin-bottom:1px}
+.position-card__symbol{font-family:var(--font-hero);font-size:22px;color:var(--text)}
+.position-card__meta{font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:4px}
+.position-card__pnl{font-family:var(--font-hero);font-size:28px;text-align:right}
+.position-card__pnl.up{color:var(--green)}.position-card__pnl.down{color:var(--red)}
+.position-card__progress{grid-column:1/-1;height:2px;background:var(--border);overflow:hidden}
+.position-card__progress-fill{height:100%;background:linear-gradient(90deg,var(--cyan),var(--gold));transition:width 1s ease}
+.empty-state{font-family:var(--font-body);font-style:italic;color:var(--muted);font-size:20px;
+  text-align:center;padding:80px 0}
 
-  /* ── Chapter VII: status ── */
-  .status-row{display:flex;flex-wrap:wrap;gap:24px;font-family:var(--font-mono);font-size:12px;
-    color:var(--muted)}
-  .status-row b{color:var(--text);font-weight:400}
+/* record */
+.chart-wrap{background:var(--surface);border:1px solid var(--border);padding:28px}
+.wl-pattern{margin-top:24px;display:flex;gap:6px;flex-wrap:wrap}
+.wl-circle{width:12px;height:12px;border-radius:50%}
+.wl-circle.win{background:var(--gold)}.wl-circle.loss{background:var(--red)}
 
-  table.plain{width:100%;border-collapse:collapse;font-size:13px}
-  table.plain th,table.plain td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)}
-  table.plain th{color:var(--muted);font-weight:400;font-size:11px;text-transform:uppercase}
-  .green{color:var(--green)!important}.red{color:var(--red)!important}.yellow{color:var(--yellow)!important}
-  .muted{color:var(--muted)}
+/* knowledge */
+#kb-constellation{width:100%;height:200px;margin-bottom:28px}
+.knowledge-entry{display:flex;align-items:center;gap:14px;padding:12px 0;
+  border-bottom:1px solid rgba(255,255,255,.04);font-family:var(--font-mono);font-size:12px}
+.knowledge-entry__conf{color:var(--gold);min-width:36px;font-size:10px}
+.knowledge-entry__desc{color:var(--muted);flex:1}
+.knowledge-entry.win .knowledge-entry__desc{color:var(--text)}
+.knowledge-entry__count{color:var(--muted);font-size:10px;white-space:nowrap}
 
-  .radar{width:36px;height:36px;border:2px solid var(--border);border-top-color:var(--accent);
-    border-radius:50%;animation:spin 1.2s linear infinite;margin:14px auto}
-  @keyframes spin{to{transform:rotate(360deg)}}
+/* engine */
+.engine-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin-bottom:56px;border:1px solid var(--border)}
+@media(max-width:600px){.engine-stats{grid-template-columns:1fr}}
+.estat{padding:36px 28px;text-align:center;border-right:1px solid var(--border);background:var(--surface)}
+.estat:last-child{border-right:none}
+.estat__num{font-family:var(--font-hero);font-size:clamp(36px,5vw,58px);color:var(--gold);margin-bottom:8px}
+.estat__label{font-family:var(--font-data);font-size:9px;letter-spacing:3px;color:var(--muted);margin-bottom:4px}
+.estat__sub{font-family:var(--font-body);font-style:italic;font-size:13px;color:var(--muted)}
+.xgb-section{max-width:600px}
+.xgb-label{display:flex;justify-content:space-between;font-family:var(--font-data);font-size:10px;
+  letter-spacing:2px;color:var(--muted);margin-bottom:12px}
+.xgb-track{height:2px;background:var(--border);overflow:hidden;margin-bottom:12px}
+.xgb-fill{height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,var(--gold));
+  transition:width 1.5s cubic-bezier(.4,0,.2,1)}
+.xgb-sub{font-family:var(--font-body);font-style:italic;font-size:13px;color:var(--muted)}
 
-  #killswitch-banner{display:none;background:var(--red);color:#fff;text-align:center;padding:10px;
-    font-weight:600;letter-spacing:.5px}
+/* thresholds */
+.thresholds-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1px;
+  border:1px solid var(--border)}
+.threshold-card{padding:22px 24px;background:var(--surface);border-right:1px solid var(--border)}
+.threshold-card__regime{font-family:var(--font-data);font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:8px}
+.threshold-card__value{font-family:var(--font-hero);font-size:32px;color:var(--gold)}
+.threshold-card__sub{font-family:var(--font-body);font-style:italic;font-size:12px;color:var(--muted);margin-top:4px}
+.threshold-card.active-regime{border-top:2px solid var(--gold)}
 
-  .market-banner{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px}
-  .market-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
-  .market-dot.open{background:var(--green);animation:livePulse 1.5s ease-in-out infinite}
-  .market-dot.closed{background:var(--muted)}
-  #market-countdown{color:var(--muted)}
+/* trade popup */
+.trade-popup{position:fixed;bottom:32px;right:32px;z-index:1000;background:rgba(4,4,4,.95);
+  border:1px solid rgba(201,168,76,.3);border-left:3px solid var(--gold);padding:18px 22px;
+  min-width:210px;backdrop-filter:blur(20px);transform:translateX(calc(100% + 40px));
+  transition:transform .6s cubic-bezier(0.34,1.56,0.64,1);font-family:var(--font-mono)}
+.trade-popup.visible{transform:translateX(0)}
+.trade-popup.win-trade{border-left-color:var(--green)}
+.trade-popup.loss-trade{border-left-color:var(--red)}
+.trade-popup.open-trade{border-left-color:var(--cyan)}
+.trade-popup__kicker{font-size:9px;letter-spacing:3px;color:var(--muted);margin-bottom:6px}
+.trade-popup__symbol{font-family:var(--font-hero);font-size:22px;color:var(--text);margin-bottom:6px}
+.trade-popup__details{font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.6}
+.trade-popup__pnl{font-family:var(--font-hero);font-size:18px}
+.trade-popup__pnl.win{color:var(--green)}.trade-popup__pnl.loss{color:var(--red)}
 
-  .wisdom{font-family:var(--font-hero);font-style:italic;font-size:16px;line-height:1.6;
-    transition:opacity .5s;color:var(--muted)}
-  .nav-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:2px;
-    padding:5px 12px;cursor:pointer;font-size:11px;letter-spacing:.5px}
-
-  /* ── trade pop-up (cinematic) ── */
-  .trade-popup{position:fixed;bottom:30px;right:30px;z-index:1000;background:#0a0a0a;
-    border:1px solid #c9a84c44;border-left:3px solid #c9a84c;padding:16px 20px;min-width:240px;
-    transform:translateX(120%);transition:transform .5s cubic-bezier(0.34,1.56,0.64,1);
-    font-family:var(--font-mono)}
-  .trade-popup.hidden{display:none}
-  .trade-popup.visible{transform:translateX(0);animation:popupPulse 2s ease infinite}
-  .trade-popup.open-trade{border-left-color:#00d4ff}
-  .trade-popup.win-trade{border-left-color:#10b981}
-  .trade-popup.loss-trade{border-left-color:#ef4444}
-  @keyframes popupPulse{0%,100%{box-shadow:0 8px 32px rgba(0,0,0,.4)}50%{box-shadow:0 8px 48px rgba(201,168,76,.25)}}
-  .popup-header{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
-  .popup-symbol{font-size:22px;font-family:var(--font-hero);color:var(--accent)}
-  .popup-details{font-size:12px;color:var(--muted);margin:4px 0}
-  .popup-pnl{font-size:20px;font-weight:700;margin-top:8px}
-  .popup-pnl.win{color:var(--green)}.popup-pnl.loss{color:var(--red)}
-
-  @media(max-width:768px){
-    .metric-grid{grid-template-columns:repeat(2,1fr)}
-    .intel-grid{grid-template-columns:1fr}
-    .learn-cols{grid-template-columns:1fr}
-    .chapter{padding:50px 18px}
-    canvas{max-height:200px}
-  }
+/* status footer */
+.system-status{position:relative;z-index:2;border-top:1px solid var(--border);padding:20px 80px;
+  display:flex;gap:36px;align-items:center;background:rgba(4,4,4,.8);flex-wrap:wrap}
+@media(max-width:768px){.system-status{padding:16px 24px}}
+.sys-label{font-family:var(--font-data);font-size:9px;letter-spacing:2px;color:var(--muted);
+  display:block;margin-bottom:2px}
+.sys-val{font-family:var(--font-mono);font-size:12px;color:var(--text)}
+.sys-link{text-decoration:none;color:var(--gold)}
+#killswitch-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:200;
+  background:var(--red);color:#fff;text-align:center;padding:10px;font-weight:600;letter-spacing:.5px}
 </style>
 </head>
 <body>
-<div id="trade-popup" class="trade-popup hidden">
-  <div class="trade-popup-inner">
-    <div id="popup-header" class="popup-header"></div>
-    <div id="popup-symbol" class="popup-symbol"></div>
-    <div id="popup-details" class="popup-details"></div>
-    <div id="popup-pnl" class="popup-pnl"></div>
+<div class="preloader" id="preloader">
+  <div class="preloader__inner">
+    <div class="preloader__kicker">SYSTEM INITIALISING</div>
+    <div class="preloader__count" id="preCount">00</div>
+    <div class="preloader__bar"><span id="preBar"></span></div>
+    <div class="preloader__sub">COSMIC PUNK TRADING SYSTEM</div>
   </div>
 </div>
-<canvas id="starfield"></canvas>
+
+<canvas id="stage"></canvas>
+<div class="grain" aria-hidden="true"></div>
+<div class="vignette" aria-hidden="true"></div>
+<div class="cursor"><div class="cursor__dot"></div><div class="cursor__ring"></div></div>
+
 <div id="killswitch-banner">🚨 KILL SWITCH ACTIVE — all trading halted</div>
 
-<header>
-  <h1>Cosmic Punk</h1>
-  <div><span class="pulse-dot"></span><span class="mode-badge" id="mode">—</span></div>
-  <div id="market-status-banner" class="market-banner">
-    <span id="market-dot" class="market-dot"></span>
-    <span id="market-text">NSE</span>
-    <span id="market-countdown"></span>
+<div class="trade-popup" id="trade-popup">
+  <div class="trade-popup__kicker" id="popup-kicker"></div>
+  <div class="trade-popup__symbol" id="popup-symbol"></div>
+  <div class="trade-popup__details" id="popup-details"></div>
+  <div class="trade-popup__pnl" id="popup-pnl"></div>
+</div>
+
+<nav class="rail">
+  <a href="#chapter-0" class="rail__dot active" data-chapter="0"><span>◆</span><i>Overview</i></a>
+  <a href="#chapter-1" class="rail__dot" data-chapter="1"><span>I</span><i>Intelligence</i></a>
+  <a href="#chapter-2" class="rail__dot" data-chapter="2"><span>II</span><i>Battlefield</i></a>
+  <a href="#chapter-3" class="rail__dot" data-chapter="3"><span>III</span><i>The Record</i></a>
+  <a href="#chapter-4" class="rail__dot" data-chapter="4"><span>IV</span><i>The Mind</i></a>
+  <a href="#chapter-5" class="rail__dot" data-chapter="5"><span>V</span><i>The Engine</i></a>
+  <a href="#chapter-6" class="rail__dot" data-chapter="6"><span>VI</span><i>The Threshold</i></a>
+</nav>
+
+<header class="site-head">
+  <div class="site-head__mark">COSMIC PUNK <em>Trading</em></div>
+  <div class="site-head__clock" id="live-clock"></div>
+  <div class="site-head__market" id="market-status">
+    <span class="market-dot" id="market-dot"></span><span id="market-text">NSE</span>
   </div>
-  <div id="live-clock" class="mono">—</div>
-  <div id="conn">● connecting…</div>
 </header>
-<div class="ticker-wrap"><div class="ticker" id="price-ticker"></div></div>
+<div class="ticker-wrap"><div class="ticker" id="price-ticker">◆ COSMIC PUNK TRADING SYSTEM ◆</div></div>
 
-<!-- CHAPTER I — THE COMMAND -->
-<section class="chapter revealed" id="chapter-1">
-  <div class="chapter-label">Chapter I</div>
-  <div class="hero-greeting hero-text">WELCOME BACK, <span class="name" id="owner">__OWNER_NAME__</span></div>
-  <div class="hero-sub" id="hero-sub">Loading market intelligence…</div>
-  <div class="metric-grid">
-    <div class="metric-card"><div class="metric-number" id="total-trades">0</div><div class="metric-label">Total Trades</div></div>
-    <div class="metric-card"><div class="metric-number" id="win-rate-num">0%</div><div class="metric-label">Win Rate</div></div>
-    <div class="metric-card"><div class="metric-number" id="metric-kb">0</div><div class="metric-label">Patterns Learned</div></div>
-    <div class="metric-card"><div class="metric-number" id="api-status">—</div><div class="metric-label">API Status</div></div>
+<section class="chapter" id="chapter-0" data-ch="0">
+  <div class="hero">
+    <p class="kicker reveal-kicker">PAPER TRADING · AI-POWERED · NSE/BSE</p>
+    <h1 class="hero__title">
+      <span class="mask"><span class="line" id="hero-greeting">WELCOME BACK,</span></span>
+      <span class="mask"><span class="line hero__name" id="hero-name">__OWNER_NAME__</span></span>
+      <span class="mask"><span class="line line--italic" id="hero-regime">Loading...</span></span>
+    </h1>
+    <div class="metrics">
+      <div class="metric reveal-metric"><div class="metric__num" id="metric-trades">0</div><div class="metric__label">TOTAL TRADES</div></div>
+      <div class="metric reveal-metric"><div class="metric__num" id="metric-wr">0%</div><div class="metric__label">WIN RATE</div></div>
+      <div class="metric reveal-metric"><div class="metric__num" id="metric-kb">0</div><div class="metric__label">PATTERNS LEARNED</div></div>
+      <div class="metric reveal-metric"><div class="metric__num metric__num--gold" id="metric-pnl">₹0</div><div class="metric__label">TOTAL P&amp;L</div></div>
+    </div>
+    <div class="scroll-cue"><span class="scroll-cue__line"></span>SCROLL TO EXPLORE</div>
   </div>
 </section>
 
-<!-- CHAPTER II — THE INTELLIGENCE -->
-<section class="chapter" id="chapter-2">
-  <div class="chapter-label">Chapter II</div>
-  <div class="chapter-title">The Intelligence</div>
-  <div class="intel-grid">
+<section class="chapter" id="chapter-1" data-ch="1">
+  <div class="chapter__head">
+    <p class="kicker reveal">CHAPTER I</p>
+    <h2 class="chapter__title reveal">The Intelligence</h2>
+    <p class="lede reveal"><em>Every market has a mood. The system reads it before acting.</em></p>
+  </div>
+  <div class="intelligence">
     <div>
-      <div class="regime-hero"><span class="regime-emoji" id="regime-emoji">◆</span><span id="regime-display">—</span></div>
-      <div class="regime-advice" id="regime-strategy">System recommends: —</div>
-      <div class="muted" id="regime-size" style="margin-top:10px;font-size:12px">—</div>
+      <div class="regime-emoji reveal" id="regime-emoji">◆</div>
+      <div class="regime-name reveal" id="regime-name">—</div>
+      <p class="strategy-rec reveal" id="strategy-rec"><em>Loading market intelligence...</em></p>
+      <div class="nifty-price reveal">
+        <span class="nifty-label">NIFTY 50</span><span class="nifty-num" id="nifty-price">₹--</span>
+      </div>
     </div>
-    <div class="gauge-wrap">
-      <svg width="140" height="140" class="circle">
-        <circle cx="70" cy="70" r="54" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="8"/>
-        <circle id="rsi-arc" cx="70" cy="70" r="54" fill="none" stroke="#c9a84c" stroke-width="8"
-          stroke-linecap="round" stroke-dasharray="339.292" stroke-dashoffset="339.292"
-          style="transition:stroke-dashoffset 1s ease,stroke .5s"/>
-      </svg>
-      <div id="nifty-price" class="mono" style="font-size:16px;color:var(--accent)">NIFTY —</div>
-      <div id="gauge-sub" class="muted" style="font-size:11px;text-align:center">—</div>
-    </div>
+    <svg class="rsi-gauge reveal" viewBox="0 0 120 120">
+      <circle cx="60" cy="60" r="54" fill="none" stroke="#1a1a1a" stroke-width="6"
+        stroke-dasharray="339.3" transform="rotate(-90 60 60)"/>
+      <circle id="rsi-arc" cx="60" cy="60" r="54" fill="none" stroke="#c9a84c" stroke-width="6"
+        stroke-linecap="round" stroke-dasharray="339.3" stroke-dashoffset="339.3"
+        transform="rotate(-90 60 60)" style="transition:stroke-dashoffset 1.5s ease,stroke .8s ease"/>
+      <text x="60" y="55" text-anchor="middle" fill="#e8e4dc" font-family="Space Grotesk" font-size="11">RSI</text>
+      <text x="60" y="72" id="rsi-value" text-anchor="middle" fill="#c9a84c" font-family="Cinzel" font-size="18">--</text>
+    </svg>
   </div>
 </section>
 
-<!-- CHAPTER III — THE BATTLEFIELD -->
-<section class="chapter" id="chapter-3">
-  <div class="chapter-label">Chapter III</div>
-  <div class="chapter-title">The Battlefield</div>
-  <div id="positions"><div class="radar"></div><div class="empty-hero">THE SYSTEM IS LEARNING</div></div>
+<section class="chapter" id="chapter-2" data-ch="2">
+  <div class="chapter__head">
+    <p class="kicker reveal">CHAPTER II</p>
+    <h2 class="chapter__title reveal">The Battlefield</h2>
+    <p class="lede reveal"><em>Capital deployed. Stop-loss armed. Target set. Every position tells a story.</em></p>
+  </div>
+  <div class="positions" id="positions-container">
+    <p class="empty-state"><em>The system is learning.<br/>Positions appear when signals clear all checks.</em></p>
+  </div>
 </section>
 
-<!-- CHAPTER IV — THE RECORD -->
-<section class="chapter" id="chapter-4">
-  <div class="chapter-label">Chapter IV</div>
-  <div class="chapter-title">The Record</div>
-  <canvas id="pnl-chart" height="110"></canvas>
-  <div style="margin-top:24px" id="wl-pattern"></div>
-  <div id="streak" style="margin-top:10px;font-family:var(--font-mono);font-size:13px;color:var(--accent)"></div>
+<section class="chapter" id="chapter-3" data-ch="3">
+  <div class="chapter__head">
+    <p class="kicker reveal">CHAPTER III</p>
+    <h2 class="chapter__title reveal">The Record</h2>
+    <p class="lede reveal"><em>Every trade is a sentence. The chart is the book.</em></p>
+  </div>
+  <div class="chart-wrap reveal"><canvas id="pnl-chart" height="110"></canvas></div>
+  <div class="wl-pattern reveal" id="wl-pattern"></div>
 </section>
 
-<!-- CHAPTER V — THE MIND -->
-<section class="chapter" id="chapter-5">
-  <div class="chapter-label">Chapter V</div>
-  <div class="chapter-title">What the System Knows</div>
-  <canvas id="kb-constellation" height="200" style="width:100%;margin-bottom:20px"></canvas>
-  <div id="knowledge"><div class="muted">Knowledge base empty — learning begins after the first trades.</div></div>
+<section class="chapter" id="chapter-4" data-ch="4">
+  <div class="chapter__head">
+    <p class="kicker reveal">CHAPTER IV</p>
+    <h2 class="chapter__title reveal">The Mind</h2>
+    <p class="lede reveal"><em>What the system has learned. What it will never forget.</em></p>
+  </div>
+  <canvas id="kb-constellation" class="reveal"></canvas>
+  <div class="knowledge-list" id="knowledge-list"></div>
 </section>
 
-<!-- CHAPTER VI — THE LEARNING ENGINE -->
-<section class="chapter" id="chapter-6">
-  <div class="chapter-label">Chapter VI</div>
-  <div class="chapter-title">24 / 7 Learning</div>
-  <div class="learn-cols">
-    <div class="learn-col">
-      <div class="num" id="forced-total">0</div><div class="lbl">Forced Trades</div>
-      <div class="muted mono" id="forced-wl" style="font-size:12px;margin-top:6px">0W / 0L</div>
-      <div class="muted" id="forced-status" style="font-size:11px;margin-top:4px">Idle</div>
-    </div>
-    <div class="learn-col">
-      <div class="num" id="sim-total">0</div><div class="lbl">Intraday Sims</div>
-      <div class="muted mono" id="sim-wr" style="font-size:12px;margin-top:6px">0%</div>
-      <div class="muted" id="sim-status" style="font-size:11px;margin-top:4px">Waiting…</div>
-    </div>
-    <div class="learn-col">
-      <div class="num" id="replay-count">0</div><div class="lbl">Replay Patterns</div>
-    </div>
+<section class="chapter" id="chapter-5" data-ch="5">
+  <div class="chapter__head">
+    <p class="kicker reveal">CHAPTER V</p>
+    <h2 class="chapter__title reveal">The Engine</h2>
+    <p class="lede reveal"><em>244 stocks. Every regime. Learning never stops.</em></p>
   </div>
-  <div style="margin-top:24px">
-    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px;color:var(--muted)">
-      <span>XGBoost Signal Model</span><span id="xgb-label">Collecting data…</span>
-    </div>
-    <div class="progress-track"><div class="progress-fill" id="xgb-progress" style="width:0%"></div></div>
+  <div class="engine-stats">
+    <div class="estat reveal"><div class="estat__num" id="forced-total">0</div><div class="estat__label">FORCED TRADES</div><div class="estat__sub" id="forced-wr">0% win rate</div></div>
+    <div class="estat reveal"><div class="estat__num" id="sim-total">0</div><div class="estat__label">SIMULATIONS</div><div class="estat__sub" id="sim-wr">0% win rate</div></div>
+    <div class="estat reveal"><div class="estat__num" id="replay-covered">0</div><div class="estat__label">REPLAY PATTERNS</div><div class="estat__sub">learned</div></div>
   </div>
-  <table class="mini-table">
-    <thead><tr><th>Symbol</th><th>Result</th><th>P&amp;L</th><th>Type</th></tr></thead>
-    <tbody id="forced-recent-rows"></tbody>
-  </table>
+  <div class="xgb-section reveal">
+    <div class="xgb-label"><span>XGBOOST SIGNAL MODEL</span><span id="xgb-label">0%</span></div>
+    <div class="xgb-track"><div class="xgb-fill" id="xgb-fill"></div></div>
+    <p class="xgb-sub" id="xgb-sub">Collecting training data...</p>
+  </div>
 </section>
 
-<!-- CHAPTER VII — SYSTEM STATUS -->
-<section class="chapter" id="chapter-7">
-  <div class="chapter-label">Chapter VII</div>
-  <div class="chapter-title">System Status</div>
-  <div class="status-row">
-    <div>Mode: <b id="sb-mode">—</b></div>
-    <div>Uptime: <b id="sb-uptime">—</b></div>
-    <div>Next job: <b id="sb-next">—</b></div>
-    <div>KB: <b id="sb-kb">—</b></div>
-    <div>Updated: <b id="sb-updated">—</b></div>
+<section class="chapter" id="chapter-6" data-ch="6">
+  <div class="chapter__head">
+    <p class="kicker reveal">CHAPTER VI</p>
+    <h2 class="chapter__title reveal">The Threshold</h2>
+    <p class="lede reveal"><em>The system adjusts its own standards from evidence. It becomes harder to fool as it grows wiser.</em></p>
   </div>
-  <div style="margin-top:24px" class="wisdom" id="wisdom">Signal over noise. Always.</div>
-  <div style="margin-top:10px">
-    <button class="nav-btn" onclick="cycleWisdom(-1)">‹ PREV</button>
-    <button class="nav-btn" onclick="cycleWisdom(1)">NEXT ›</button>
-  </div>
-  <div style="margin-top:30px">
-    <a href="https://github.com/taher-ahmed-092/groww-swing-trader" style="color:var(--accent);font-size:12px">GitHub repo →</a>
+  <div class="thresholds-grid" id="thresholds-grid">
+    <p class="empty-state"><em>Accumulating evidence... (15+ trades per regime needed)</em></p>
   </div>
 </section>
+
+<footer class="system-status">
+  <div class="sys-item"><span class="sys-label">MODE</span><span class="sys-val" id="sb-mode">—</span></div>
+  <div class="sys-item"><span class="sys-label">UPTIME</span><span class="sys-val" id="sb-uptime">—</span></div>
+  <div class="sys-item"><span class="sys-label">NEXT JOB</span><span class="sys-val" id="sb-next">—</span></div>
+  <div class="sys-item"><span class="sys-label">KB PATTERNS</span><span class="sys-val" id="sb-kb">—</span></div>
+  <div class="sys-item"><span class="sys-label">UPDATED</span><span class="sys-val" id="sb-updated">—</span></div>
+  <a class="sys-item sys-link" href="https://github.com/taher-ahmed-092/groww-swing-trader" target="_blank">GitHub →</a>
+</footer>
 
 <script>
 const TOKEN="__DASHBOARD_TOKEN__";
-const WS_PROTO=location.protocol==="https:"?"wss":"ws";
-const WS_URL=`${WS_PROTO}://${location.host}/ws/${TOKEN}`;
-let ws=null,pnlChart=null,lastData=null;
+const OWNER="__OWNER_NAME__";
 
-const TIPS=["The machine never sleeps. Neither does your edge.","Every rejection is capital saved.",
-  "Signal over noise. Always.","In downtrends we wait. In uptrends we hunt.",
-  "Patience encoded. Discipline automated.","Numbers don't lie. Patterns don't forget."];
-let wisdomItems=[],wisdomIdx=0;
+// ── Preloader ──
+(function(){
+  const count=document.getElementById('preCount'),bar=document.getElementById('preBar'),
+    preloader=document.getElementById('preloader');
+  let n=0;
+  const interval=setInterval(()=>{
+    n=Math.min(n+Math.random()*4+1,100);
+    count.textContent=String(Math.floor(n)).padStart(2,'0');
+    bar.style.width=n+'%';
+    if(n>=100){
+      clearInterval(interval);count.textContent='100';bar.style.width='100%';
+      setTimeout(()=>{preloader.classList.add('done');setTimeout(()=>preloader.remove(),800);initAll();},400);
+    }
+  },40);
+})();
 
-function setConn(s){const e=document.getElementById("conn");
-  e.textContent=s==="connected"?"● live":"● reconnecting…";
-  e.style.color=s==="connected"?"var(--green)":"var(--yellow)";}
-
-function connect(){
-  ws=new WebSocket(WS_URL);
-  ws.onopen=()=>setConn("connected");
-  ws.onmessage=e=>{try{updateDashboard(JSON.parse(e.data))}catch(_){}};
-  ws.onclose=()=>{setConn("reconnecting");setTimeout(connect,3000)};
-  ws.onerror=()=>ws.close();
+function initThreeJS(){
+  const canvas=document.getElementById('stage');
+  if(typeof THREE==='undefined')return;
+  const renderer=new THREE.WebGLRenderer({canvas,alpha:true,antialias:false});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(innerWidth,innerHeight);
+  const scene=new THREE.Scene();
+  const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1000);
+  camera.position.z=5;
+  const count=2000,positions=new Float32Array(count*3);
+  for(let i=0;i<count*3;i++)positions[i]=(Math.random()-0.5)*20;
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(positions,3));
+  const mat=new THREE.PointsMaterial({color:0xc9a84c,size:0.015,transparent:true,opacity:0.6});
+  const stars=new THREE.Points(geo,mat);scene.add(stars);
+  let mouseX=0,mouseY=0;
+  document.addEventListener('mousemove',e=>{
+    mouseX=(e.clientX/innerWidth-0.5)*0.3;mouseY=(e.clientY/innerHeight-0.5)*0.3;});
+  function animate(){
+    requestAnimationFrame(animate);
+    stars.rotation.y+=0.0003;stars.rotation.x+=0.0001;
+    camera.position.x+=(mouseX-camera.position.x)*0.05;
+    camera.position.y+=(-mouseY-camera.position.y)*0.05;
+    camera.lookAt(scene.position);renderer.render(scene,camera);}
+  animate();
+  window.addEventListener('resize',()=>{
+    camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);});
 }
 
-function updateClock(){
-  const ist=new Intl.DateTimeFormat('en-IN',{timeZone:'Asia/Kolkata',hour12:false,
-    hour:'2-digit',minute:'2-digit',second:'2-digit',weekday:'short',day:'numeric',
-    month:'short'}).format(new Date());
-  document.getElementById('live-clock').textContent=ist+' IST';
+function initCursor(){
+  const cursor=document.querySelector('.cursor');if(!cursor)return;
+  const dot=cursor.querySelector('.cursor__dot'),ring=cursor.querySelector('.cursor__ring');
+  let rx=0,ry=0;
+  document.addEventListener('mousemove',e=>{
+    dot.style.left=e.clientX+'px';dot.style.top=e.clientY+'px';
+    rx+=(e.clientX-rx)*0.15;ry+=(e.clientY-ry)*0.15;});
+  function followRing(){ring.style.left=rx+'px';ring.style.top=ry+'px';requestAnimationFrame(followRing);}
+  followRing();
 }
-setInterval(updateClock,1000);updateClock();
 
-// ── cinematic count-up (ease-out expo) ──
-function countUp(el,target,duration=1200,prefix='',suffix='',decimals=0){
+function initLenis(){
+  if(typeof Lenis==='undefined')return null;
+  const lenis=new Lenis({duration:1.4,easing:t=>Math.min(1,1.001-Math.pow(2,-10*t))});
+  function raf(time){lenis.raf(time);requestAnimationFrame(raf);}
+  requestAnimationFrame(raf);
+  return lenis;
+}
+
+function initScrollTrigger(){
+  if(typeof gsap==='undefined')return;
+  gsap.registerPlugin(ScrollTrigger);
+  gsap.utils.toArray('.mask .line').forEach((line,i)=>{
+    gsap.from(line,{y:'110%',duration:1.2,delay:0.3+i*0.15,ease:'power4.out'});});
+  gsap.utils.toArray('.reveal').forEach(el=>{
+    gsap.from(el,{scrollTrigger:{trigger:el,start:'top 85%',toggleActions:'play none none none'},
+      opacity:0,y:40,duration:0.9,ease:'power3.out'});});
+  gsap.from('.reveal-metric',{opacity:0,y:60,stagger:0.1,duration:0.9,delay:0.8,ease:'power3.out'});
+  gsap.from('.reveal-kicker',{opacity:0,duration:1.2,delay:0.2,ease:'power2.out'});
+  document.querySelectorAll('.chapter').forEach(sec=>{
+    ScrollTrigger.create({trigger:sec,start:'top center',end:'bottom center',
+      onToggle:self=>{if(self.isActive){
+        document.querySelectorAll('.rail__dot').forEach(d=>d.classList.remove('active'));
+        const ch=sec.getAttribute('data-ch');
+        document.querySelector(`.rail__dot[data-chapter="${ch}"]`)?.classList.add('active');}}});});
+}
+
+function startClock(){
+  const el=document.getElementById('live-clock');
+  function update(){
+    const ist=new Intl.DateTimeFormat('en-IN',{timeZone:'Asia/Kolkata',hour12:false,
+      hour:'2-digit',minute:'2-digit',second:'2-digit',weekday:'short',day:'numeric',month:'short'}).format(new Date());
+    el.textContent=ist+' IST';}
+  update();setInterval(update,1000);
+}
+
+function updateMarketStatus(){
+  const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  const h=ist.getHours(),m=ist.getMinutes(),day=ist.getDay(),total=h*60+m;
+  const isWeekday=day>=1&&day<=5,isOpen=isWeekday&&total>=555&&total<930;
+  const dot=document.getElementById('market-dot'),text=document.getElementById('market-text');
+  if(!dot)return;
+  if(isOpen){dot.className='market-dot open';const mins=930-total;
+    text.textContent=`NSE OPEN · ${Math.floor(mins/60)}h ${mins%60}m`;
+  }else{dot.className='market-dot closed';text.textContent='NSE CLOSED';}
+}
+
+function countUp(el,target,duration=1200,prefix='',suffix='',dec=0){
   if(!el)return;
-  const start=parseFloat(el.dataset.value||0),startTime=performance.now();
   target=parseFloat(target)||0;
-  function step(now){
-    const elapsed=now-startTime,progress=Math.min(elapsed/duration,1);
-    const eased=progress===1?1:1-Math.pow(2,-10*progress);
-    const current=start+(target-start)*eased;
-    el.textContent=prefix+current.toFixed(decimals)+suffix;
-    el.dataset.value=current;
-    if(progress<1)requestAnimationFrame(step);
-    else{el.textContent=prefix+target.toFixed(decimals)+suffix;el.dataset.value=target;}
-  }
-  requestAnimationFrame(step);
+  const start=performance.now();
+  function frame(now){
+    const p=Math.min((now-start)/duration,1),eased=1-Math.pow(1-p,4);
+    el.textContent=prefix+(target*eased).toFixed(dec)+suffix;
+    if(p<1)requestAnimationFrame(frame);else el.textContent=prefix+target.toFixed(dec)+suffix;}
+  requestAnimationFrame(frame);
 }
 
-function updateRsiArc(rsi){
-  const arc=document.getElementById('rsi-arc');if(!arc)return;
-  const circumference=2*Math.PI*54,pct=Math.max(0,Math.min(100,rsi))/100;
-  arc.style.strokeDashoffset=circumference*(1-pct);
-  arc.style.stroke=rsi>=60?'#c9a84c':rsi>=40?'#f5d78e':'#ef4444';
-}
-
-let _prevPosCount=0;
-function updatePositions(positions){
-  const c=document.getElementById('positions');
-  if(!positions||!positions.length){
-    c.innerHTML='<div class="radar"></div><div class="empty-hero">THE SYSTEM IS LEARNING</div>';
-    _prevPosCount=0;updateTicker([]);return;}
-  const isNew=positions.length>_prevPosCount;
-  c.innerHTML=positions.map((p,i)=>{
-    const span=(p.target-p.entry)||1,prog=Math.max(0,Math.min(100,(p.current-p.entry)/span*100));
-    const cls=p.pnl_pct>=0?'green':'red';
-    const flag=(isNew&&i>=_prevPosCount)?' new':'';
-    return `<div class="pos${flag}"><div class="top"><span class="sym">${p.symbol}</span>
-      <span class="badge">${p.strategy}</span></div>
-      <div class="mono">₹${p.entry} → ₹${p.current}
-      <span class="${cls}" style="font-size:20px;font-family:var(--font-hero);float:right">${p.pnl_pct>=0?'+':''}${p.pnl_pct}%</span></div>
-      <div class="bar"><span style="width:${prog}%"></span></div>
-      <div class="muted" style="font-size:11px;margin-top:6px">Target ₹${p.target} · Stop ₹${p.stop} · Day ${p.days_held}</div></div>`;
-  }).join('');
-  if(isNew)setTimeout(()=>c.querySelectorAll('.pos.new').forEach(e=>e.classList.remove('new')),3000);
-  _prevPosCount=positions.length;
-  updateTicker(positions);
-}
-
-function updatePnlChart(h){
-  const labels=h.map(d=>d.symbol+' '+d.date),data=h.map(d=>d.pnl);
-  const colors=data.map(d=>d>=0?'#c9a84c':'#ef4444');
+let pnlChart=null;
+function updatePnlChart(history){
+  const canvas=document.getElementById('pnl-chart');if(!canvas)return;
+  const ctx=canvas.getContext('2d');
+  const labels=history.map(d=>d.symbol||'?'),data=history.map(d=>d.pnl||0);
+  const colors=data.map(v=>v>=0?'#c9a84c':'#ef4444');
   if(pnlChart){pnlChart.data.labels=labels;pnlChart.data.datasets[0].data=data;
-    pnlChart.data.datasets[0].backgroundColor=colors;pnlChart.update();return;}
-  pnlChart=new Chart(document.getElementById('pnl-chart').getContext('2d'),{
-    type:'bar',data:{labels,datasets:[{data,backgroundColor:colors,borderRadius:2}]},
-    options:{responsive:true,plugins:{legend:{display:false}},
-      scales:{x:{ticks:{color:'#6b6560',font:{size:9}}},
-              y:{ticks:{color:'#6b6560'},grid:{color:'rgba(255,255,255,.05)'}}}}});
-}
-
-function updateWL(wl){
-  const c=document.getElementById('wl-pattern');
-  c.innerHTML=(wl||[]).slice(0,20).reverse().map((t,i)=>
-    `<span class="wl-dot" title="${t.symbol}" style="background:${t.outcome==='WIN'?'#c9a84c':'#ef4444'};animation-delay:${i*40}ms"></span>`).join('');
-  let streak=0,kind=null;
-  for(const t of (wl||[])){if(kind===null)kind=t.outcome;if(t.outcome===kind)streak++;else break;}
-  const s=document.getElementById('streak');
-  if(kind==='WIN'&&streak>=3)s.innerHTML=`${streak} wins in a row`;
-  else if(kind)s.textContent=`Current streak: ${streak} ${kind.toLowerCase()}${streak>1?'es':''}`;
-  else s.textContent='';
-}
-
-function updateKnowledge(kb){
-  const c=document.getElementById('knowledge');
-  if(!kb||!kb.length){c.innerHTML='<div class="muted">Waiting for the first scan — patterns appear as the system learns.<br>'
-    +'Run <code>/scan</code> or <code>/pairs</code> in Telegram, or wait for the intraday sims.</div>';return;}
-  c.innerHTML=kb.map((e,i)=>{
-    const isWin=(e.description||'').includes('WON')||(e.description||'').includes('WIN');
-    const cls=isWin?'win':'loss',arrow=isWin?'↗':'↘';
-    return `<div class="knowledge-entry ${cls}"><span class="conf">[${Math.round(e.confidence*100)}%]</span>
-      <span>${arrow} ${e.description}</span></div>`;
-  }).join('');
-}
-
-const REGIME_ICON={BULL_TRENDING:'🐂',BEAR_TRENDING:'🐻',VOLATILE:'⚡',RANGE_BOUND:'↔',RECOVERY:'🌱',TRANSITIONAL:'🌀'};
-function updateRegime(r){
-  if(!r)return;
-  document.getElementById('regime-emoji').textContent=REGIME_ICON[r.regime]||'◆';
-  document.getElementById('regime-display').textContent=r.regime||'UNKNOWN';
-  document.getElementById('regime-strategy').textContent='System recommends: '+(r.strategy||'—');
-  document.getElementById('regime-size').textContent='Position sizing at '+((r.size_multiplier||1))+'× capacity';
-  document.getElementById('gauge-sub').textContent=`RSI ${(r.rsi||0).toFixed(1)}`;
-  updateRsiArc(r.rsi||0);
-}
-
-function updateSimInsights(si){
-  // Reserved for future insight rotation; harmless no-op if absent.
-}
-
-function buildWisdom(d){
-  const items=[...TIPS];
-  if(d.summary&&d.summary.total_trades>0)
-    items.push(`You've placed ${d.summary.total_trades} trades with a ${d.summary.win_rate}% win rate.`);
-  if(d.trajectory&&d.trajectory.context_sentence)items.push(d.trajectory.context_sentence);
-  if(d.regime)items.push(`Market regime: ${d.regime.regime}. The system adapts its strategy automatically.`);
-  return items;
-}
-function renderWisdom(){if(!wisdomItems.length)return;
-  const e=document.getElementById('wisdom');e.style.opacity=0;
-  setTimeout(()=>{e.textContent=wisdomItems[wisdomIdx];e.style.opacity=1},300);}
-function cycleWisdom(dir){if(!wisdomItems.length)return;
-  wisdomIdx=(wisdomIdx+dir+wisdomItems.length)%wisdomItems.length;renderWisdom();}
-setInterval(()=>cycleWisdom(1),30000);
-
-function updateTicker(positions){
-  const ticker=document.getElementById('price-ticker');if(!ticker)return;
-  let html='';
-  (positions||[]).forEach(p=>{
-    const cls=p.pnl_pct>=0?'up':'down',arrow=p.pnl_pct>=0?'▲':'▼';
-    html+=`<span class="ticker-item ${cls}">${p.symbol} ₹${(p.current||0).toLocaleString('en-IN',{maximumFractionDigits:2})} ${arrow} ${Math.abs(p.pnl_pct||0).toFixed(1)}%</span>`;
-  });
-  html+=`<span class="ticker-item">COSMIC PUNK TRADING SYSTEM</span>`;
-  ticker.innerHTML=html+html;  // duplicate for a seamless scroll loop
+    pnlChart.data.datasets[0].backgroundColor=colors;pnlChart.update('active');return;}
+  Chart.defaults.color='#6b6560';Chart.defaults.font.family="'Space Grotesk', sans-serif";
+  pnlChart=new Chart(ctx,{type:'bar',data:{labels,datasets:[{data,backgroundColor:colors,
+    borderRadius:0,borderSkipped:false,borderWidth:0}]},
+    options:{responsive:true,animation:{duration:800},plugins:{legend:{display:false}},
+      scales:{x:{grid:{color:'#1a1a1a'},ticks:{font:{size:9}}},
+              y:{grid:{color:'#1a1a1a'},ticks:{font:{size:9},callback:v=>v+'%'}}}}});
 }
 
 function renderConstellation(entries){
@@ -483,180 +512,216 @@ function renderConstellation(entries){
   const ctx=canvas.getContext('2d');
   const W=canvas.width=canvas.offsetWidth||600,H=canvas.height=200;
   ctx.clearRect(0,0,W,H);
-  if(!entries||!entries.length){
-    ctx.fillStyle='rgba(107,101,96,.6)';ctx.font='12px '+getComputedStyle(document.body).fontFamily;
-    ctx.fillText('Constellation forms as the system learns…',16,100);return;}
+  if(!entries||!entries.length)return;
   const stars=entries.map((e,i)=>({
-    x:50+(i/Math.max(1,entries.length))*(W-100)+Math.sin(i*1.5)*30,
-    y:40+(1-e.confidence)*120+Math.cos(i*2)*20,
-    r:3+e.confidence*8,conf:e.confidence,
-    label:(e.description||'').substring(0,20)+'…',
+    x:40+(i/Math.max(entries.length-1,1))*(W-80)+Math.sin(i*1.5)*20,
+    y:40+(1-e.confidence)*120+Math.cos(i*2)*15,r:2+e.confidence*7,conf:e.confidence,
     isRule:!e.is_hypothesis,category:e.category}));
-  ctx.strokeStyle='rgba(201,168,76,.15)';ctx.lineWidth=1;
+  ctx.strokeStyle='rgba(201,168,76,0.1)';ctx.lineWidth=1;
   for(let i=0;i<stars.length;i++)for(let j=i+1;j<stars.length;j++){
     if(entries[i].category===entries[j].category){
       ctx.beginPath();ctx.moveTo(stars[i].x,stars[i].y);ctx.lineTo(stars[j].x,stars[j].y);ctx.stroke();}}
   stars.forEach(s=>{
     if(s.isRule){
       const g=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,s.r*3);
-      g.addColorStop(0,'rgba(201,168,76,.4)');g.addColorStop(1,'rgba(201,168,76,0)');
+      g.addColorStop(0,'rgba(201,168,76,0.3)');g.addColorStop(1,'rgba(201,168,76,0)');
       ctx.fillStyle=g;ctx.beginPath();ctx.arc(s.x,s.y,s.r*3,0,Math.PI*2);ctx.fill();}
-    ctx.fillStyle=s.conf>=0.7?'#c9a84c':s.conf>=0.4?'#f5d78e':'#6b6560';
-    ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle='rgba(232,228,220,.7)';ctx.font='9px '+getComputedStyle(document.body).fontFamily;
-    ctx.fillText(s.label,s.x+s.r+3,s.y+3);});
+    ctx.fillStyle=s.conf>=0.7?'#c9a84c':s.conf>=0.4?'#f5d78e80':'#6b656080';
+    ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();});
 }
 
-function updateMarketStatus(){
-  const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-  const h=ist.getHours(),m=ist.getMinutes(),s=ist.getSeconds(),day=ist.getDay();
-  const isWeekday=day>=1&&day<=5,totalMins=h*60+m;
-  const isOpen=isWeekday&&totalMins>=555&&totalMins<930; // 9:15–15:30 IST
-  const dot=document.getElementById('market-dot'),text=document.getElementById('market-text'),
-    countdown=document.getElementById('market-countdown');
-  if(!dot)return;
-  if(isOpen){
-    dot.className='market-dot open';text.textContent='NSE OPEN';
-    const mins=930-totalMins,h2=Math.floor(mins/60),m2=mins%60;
-    countdown.textContent=`closes in ${h2>0?h2+'h ':''}${m2}m ${60-s}s`;
-  }else{
-    dot.className='market-dot closed';text.textContent='NSE CLOSED';
-    let nextOpen=isWeekday&&totalMins<555?555-totalMins:((7-day)%7)*1440+555-totalMins;
-    if(nextOpen<=0)nextOpen+=7*1440;
-    const nh=Math.floor(nextOpen/60),nm=nextOpen%60;
-    countdown.textContent=`opens in ${nh}h ${nm}m`;
-  }
-}
-setInterval(updateMarketStatus,1000);updateMarketStatus();
-
-function updateLearningPanel(d){
-  const sim=d.intraday_sim||{},learning=d.learning_metrics||{};
-  const simTotal=sim.total||0;
-  document.getElementById('sim-total').textContent=simTotal;
-  document.getElementById('sim-wr').textContent=(sim.win_rate||0).toFixed(1)+'%';
-  document.getElementById('replay-count').textContent=learning.replay_patterns||0;
-  const progress=learning.xgboost_progress||0;
-  document.getElementById('xgb-progress').style.width=progress.toFixed(0)+'%';
-  document.getElementById('xgb-label').textContent=progress>=100?'ACTIVE':`${progress.toFixed(0)}% trained`;
-  const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-  const h=ist.getHours(),m=ist.getMinutes(),day=ist.getDay();
-  const open=day>=1&&day<=5&&(h>9||(h===9&&m>=30))&&(h<15||(h===15&&m<=15));
-  document.getElementById('sim-status').textContent=
-    open?'LEARNING NOW':(day===0||day===6)?'Weekend':'Done for today';
-}
-
-function updateForcedPanel(d){
-  const f=d.forced_trades||{};
-  document.getElementById('forced-total').textContent=f.total||0;
-  document.getElementById('forced-wl').textContent=`${f.wins||0}W / ${f.losses||0}L`;
-  const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-  const h=ist.getHours(),m=ist.getMinutes(),day=ist.getDay();
-  const open=day>=1&&day<=5&&(h>9||(h===9&&m>=15))&&(h<15||(h===15&&m<=30));
-  document.getElementById('forced-status').textContent=open?'Learning now':'Off-hours sims';
-  const tbody=document.getElementById('forced-recent-rows');tbody.innerHTML='';
-  (f.recent||[]).slice().reverse().slice(0,5).forEach(t=>{
-    const tr=document.createElement('tr');
-    const cls=t.outcome==='WIN'?'win-sim':'loss-sim',icon=t.outcome==='WIN'?'✅':t.outcome==='LOSS'?'❌':'⏳';
-    const pnl=(t.pnl_pct!=null?t.pnl_pct:0);
-    tr.innerHTML=`<td>${t.symbol}</td><td class="${cls}">${icon}</td>`+
-      `<td class="${cls}">${pnl>0?'+':''}${pnl.toFixed(1)}%</td>`+
-      `<td style="color:var(--muted);font-size:10px">${(t.trade_type||'').replace('_FORCED','').slice(0,10)}</td>`;
-    tbody.appendChild(tr);});
-}
-
-function handleTradeEvent(event){
-  const popup=document.getElementById('trade-popup');
-  const header=document.getElementById('popup-header');
-  const symbol=document.getElementById('popup-symbol');
-  const details=document.getElementById('popup-details');
-  const pnl=document.getElementById('popup-pnl');
-
+const popupQueue=[];let popupActive=false;
+function enqueuePopup(event){popupQueue.push(event);if(!popupActive)drainPopupQueue();}
+function drainPopupQueue(){
+  if(!popupQueue.length){popupActive=false;return;}
+  popupActive=true;
+  const ev=popupQueue.shift(),popup=document.getElementById('trade-popup');
   popup.className='trade-popup';
-  if(event.type==='TRADE_OPENED'){
+  const won=ev.outcome==='WIN';
+  if(ev.type==='TRADE_OPENED'){
     popup.classList.add('open-trade');
-    header.textContent='◆ TRADE OPENED';
-    symbol.textContent=event.symbol;
-    details.innerHTML=`Entry ₹${Number(event.entry||0).toLocaleString('en-IN')}<br>`+
-      `SL ₹${Number(event.stop||0).toLocaleString('en-IN')} · `+
-      `Target ₹${Number(event.target||0).toLocaleString('en-IN')}`;
-    pnl.textContent='';pnl.className='popup-pnl';
-  }else if(event.type==='TRADE_CLOSED'){
-    const won=event.outcome==='WIN';
-    popup.classList.add(won?'win-trade':'loss-trade');
-    header.textContent=won?'▲ WIN':'▼ LOSS';
-    symbol.textContent=event.symbol;
-    details.innerHTML=`${event.trade_type||''}`;
-    const sign=(event.pnl_pct||0)>=0?'+':'';
-    pnl.textContent=`${sign}${(event.pnl_pct||0).toFixed(1)}%`;
-    pnl.className=`popup-pnl ${won?'win':'loss'}`;
+    document.getElementById('popup-kicker').textContent='◆ TRADE OPENED';
   }else{
-    return;
+    popup.classList.add(won?'win-trade':'loss-trade');
+    document.getElementById('popup-kicker').textContent=won?'▲ WIN':'▼ LOSS';
   }
-  popup.classList.remove('hidden');
-  requestAnimationFrame(()=>{popup.classList.add('visible');});
-  setTimeout(()=>{
-    popup.classList.remove('visible');
-    setTimeout(()=>{popup.classList.add('hidden');},500);
-  },4000);
+  document.getElementById('popup-symbol').textContent=ev.symbol||'?';
+  document.getElementById('popup-details').innerHTML=
+    `Entry ₹${Number(ev.entry||0).toLocaleString('en-IN')}<br>`+
+    `Stop ₹${Number(ev.stop||0).toLocaleString('en-IN')}`+
+    (ev.target?` · Target ₹${Number(ev.target).toLocaleString('en-IN')}`:'');
+  const pnlEl=document.getElementById('popup-pnl');
+  if(ev.pnl_pct!=null){
+    pnlEl.textContent=`${ev.pnl_pct>0?'+':''}${Number(ev.pnl_pct).toFixed(1)}%`;
+    pnlEl.className='trade-popup__pnl '+(won?'win':'loss');
+  }else{pnlEl.textContent='';}
+  requestAnimationFrame(()=>popup.classList.add('visible'));
+  setTimeout(()=>{popup.classList.remove('visible');setTimeout(drainPopupQueue,600);},4500);
+}
+
+const REGIME_EMOJI={BULL_TRENDING:'🐂',BEAR_TRENDING:'🐻',VOLATILE:'⚡',RANGE_BOUND:'↔',
+  RECOVERY:'🌱',TRANSITIONAL:'🌀',UNKNOWN:'◆'};
+
+function updatePositions(positions){
+  const el=document.getElementById('positions-container');if(!el)return;
+  if(!positions.length){
+    el.innerHTML='<p class="empty-state"><em>The system is learning.<br/>'+
+      'Positions appear when signals clear all checks.</em></p>';return;}
+  el.innerHTML='';
+  positions.forEach(p=>{
+    const pct=p.entry&&p.target?Math.min(100,Math.max(0,(p.current-p.entry)/(p.target-p.entry)*100)):50;
+    const pnlClass=(p.pnl_pct||0)>=0?'up':'down',sign=(p.pnl_pct||0)>=0?'+':'';
+    el.innerHTML+=`
+      <div class="position-card">
+        <div>
+          <div class="position-card__symbol">${p.symbol}</div>
+          <div class="position-card__meta">Entry ₹${(p.entry||0).toLocaleString('en-IN')} · `+
+            `Stop ₹${(p.stop||0).toLocaleString('en-IN')} · ${p.days_held||0}d held</div>
+        </div>
+        <div class="position-card__pnl ${pnlClass}">${sign}${(p.pnl_pct||0).toFixed(1)}%</div>
+        <div class="position-card__progress"><div class="position-card__progress-fill" style="width:${pct}%"></div></div>
+      </div>`;
+  });
+}
+
+function updateKnowledge(entries){
+  const el=document.getElementById('knowledge-list');if(!el)return;
+  el.innerHTML='';
+  entries.slice(0,10).forEach(e=>{
+    const desc=e.description||'';
+    const won=desc.includes('WON')||(!desc.includes('LOST')&&!desc.includes('LOSS'));
+    el.innerHTML+=`
+      <div class="knowledge-entry ${won?'win':''}">
+        <div class="knowledge-entry__conf">${Math.round(e.confidence*100)}%</div>
+        <div class="knowledge-entry__desc">${desc}</div>
+        <div class="knowledge-entry__count">${e.count}×</div>
+      </div>`;
+  });
+}
+
+function updateThresholds(adaptive,currentRegime){
+  const el=document.getElementById('thresholds-grid');
+  if(!el||!adaptive||!Object.keys(adaptive).length)return;
+  el.innerHTML='';
+  Object.entries(adaptive).forEach(([regime,data])=>{
+    const isActive=regime===currentRegime;
+    const wr=data.win_rate!=null?Math.round(data.win_rate*100)+'% WR':'No data';
+    const evidence=data.evidence||0,adj=(data.judge_min||6.5)-6.5;
+    const direction=adj<-0.05?'↓ easier':adj>0.05?'↑ harder':'→ default';
+    el.innerHTML+=`
+      <div class="threshold-card ${isActive?'active-regime':''}">
+        <div class="threshold-card__regime">${regime}</div>
+        <div class="threshold-card__value">${(data.judge_min||6.5).toFixed(1)}/10</div>
+        <div class="threshold-card__sub">${direction} · ${evidence} trades · ${wr}</div>
+      </div>`;
+  });
+}
+
+function updateTicker(positions,nifty,rsi,regime){
+  const el=document.getElementById('price-ticker');if(!el)return;
+  let items=[`◆ COSMIC PUNK`,`NIFTY ₹${(nifty||0).toLocaleString('en-IN')}`,
+    `RSI ${(rsi||0).toFixed(1)}`,`${regime}`];
+  (positions||[]).forEach(p=>{
+    const s=(p.pnl_pct||0)>=0?'▲':'▼';
+    items.push(`${p.symbol} ${s} ${Math.abs(p.pnl_pct||0).toFixed(1)}%`);});
+  const html=items.join(' &nbsp;·&nbsp; ');
+  el.innerHTML=html+' &nbsp;·&nbsp; '+html;
 }
 
 function updateDashboard(d){
-  if(d.error){document.getElementById('conn').textContent='● error';return;}
-  if(d.event){handleTradeEvent(d.event);}
-  lastData=d;
-  document.getElementById('mode').textContent=d.mode||'—';
-  document.getElementById('owner').textContent=d.owner||'Trader';
-  document.getElementById('api-status').textContent=d.api_active?'ACTIVE':'DEMO';
-  document.getElementById('hero-sub').textContent=
-    (d.regime?.regime||'—')+' · NIFTY '+(d.nifty_price!=null?Number(d.nifty_price).toLocaleString('en-IN',{maximumFractionDigits:0}):'—');
+  if(d.error){return;}
+  if(d.event)enqueuePopup(d.event);
 
-  const s=d.summary||{};
-  countUp(document.getElementById('total-trades'),s.total_trades,1200);
-  countUp(document.getElementById('win-rate-num'),s.win_rate,1200,'','%',1);
+  const s=d.summary||{},forced=d.forced_trades||{},learning=d.learning_metrics||{},
+    adaptive=d.adaptive_thresholds||{},regimeData=d.regime||{},intra=d.intraday_sim||{};
+
+  const nameEl=document.getElementById('hero-name');
+  if(nameEl&&!nameEl.dataset.set){nameEl.textContent=(d.owner||OWNER).toUpperCase();nameEl.dataset.set='1';}
+
+  countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
+  countUp(document.getElementById('metric-wr'),s.win_rate||0,1200,'','%',1);
   countUp(document.getElementById('metric-kb'),(d.knowledge||[]).length,800);
+  countUp(document.getElementById('metric-pnl'),s.total_pnl_inr||0,1200,'₹','',2);
 
-  updatePositions(d.positions);updatePnlChart(d.pnl_history||[]);updateWL(d.wl_chart);
-  updateKnowledge(d.knowledge);updateRegime(d.regime);updateSimInsights(d.sim_insights);
-  renderConstellation(d.knowledge);updateLearningPanel(d);updateForcedPanel(d);
+  const regime=regimeData.regime||'UNKNOWN';
+  const heroRegime=document.getElementById('hero-regime');
+  if(heroRegime)heroRegime.textContent=regime.replace(/_/g,' ');
+  const regimeEmoji=document.getElementById('regime-emoji');
+  if(regimeEmoji)regimeEmoji.textContent=REGIME_EMOJI[regime]||'◆';
+  const regimeName=document.getElementById('regime-name');
+  if(regimeName)regimeName.textContent=regime.replace(/_/g,' ');
+  const strEl=document.getElementById('strategy-rec');
+  if(strEl)strEl.innerHTML=`<em>${regimeData.strategy||'Analysing market...'}</em>`;
+
+  const nifty=d.nifty_price||0,niftyEl=document.getElementById('nifty-price');
+  if(niftyEl)niftyEl.textContent='₹'+Number(nifty).toLocaleString('en-IN',{maximumFractionDigits:0});
+  const rsi=d.nifty_rsi||0,arc=document.getElementById('rsi-arc');
+  if(arc){const circ=2*Math.PI*54;arc.style.strokeDashoffset=circ*(1-Math.max(0,Math.min(100,rsi))/100);
+    arc.style.stroke=rsi>=60?'#c9a84c':rsi>=40?'#f5d78e':'#ef4444';}
+  const rsiVal=document.getElementById('rsi-value');if(rsiVal)rsiVal.textContent=rsi.toFixed(0);
+
+  updatePositions(d.positions||[]);
+  if((d.pnl_history||[]).length)updatePnlChart(d.pnl_history);
+
+  const wl=document.getElementById('wl-pattern');
+  if(wl){wl.innerHTML='';(d.wl_chart||[]).slice(-20).forEach(t=>{
+    const c=document.createElement('div');
+    c.className='wl-circle '+(t.outcome==='WIN'?'win':'loss');c.title=t.symbol;wl.appendChild(c);});}
+
+  renderConstellation(d.knowledge||[]);
+  updateKnowledge(d.knowledge||[]);
+
+  countUp(document.getElementById('forced-total'),forced.total||0,600);
+  const fwrEl=document.getElementById('forced-wr');
+  if(fwrEl)fwrEl.textContent=(forced.win_rate||0).toFixed(0)+'% win rate';
+
+  countUp(document.getElementById('sim-total'),intra.total||0,600);
+  const swrEl=document.getElementById('sim-wr');
+  if(swrEl)swrEl.textContent=(intra.win_rate||0).toFixed(0)+'% win rate';
+
+  countUp(document.getElementById('replay-covered'),learning.replay_patterns||0,800);
+
+  const xgbPct=learning.xgboost_progress||0;
+  const fill=document.getElementById('xgb-fill'),label=document.getElementById('xgb-label'),
+    sub=document.getElementById('xgb-sub');
+  if(fill)fill.style.width=xgbPct+'%';
+  if(label)label.textContent=xgbPct+'%';
+  if(sub)sub.textContent=xgbPct>=100?'Model active — predicting win probability'
+    :`${Math.max(0,30-Math.round(xgbPct*0.3))} more trades needed`;
+
+  updateThresholds(adaptive,regime);
+  updateTicker(d.positions||[],nifty,rsi,regime);
 
   const nextJob=(d.next_jobs&&d.next_jobs[0])?`${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'No more jobs today';
-  document.getElementById('sb-mode').textContent=d.mode||'—';
-  document.getElementById('sb-uptime').textContent=d.system_uptime||'—';
-  document.getElementById('sb-next').textContent=nextJob;
-  document.getElementById('sb-kb').textContent=(d.knowledge||[]).length;
-  document.getElementById('sb-updated').textContent=(d.timestamp||'').slice(11,19)+' IST';
+  const sbMode=document.getElementById('sb-mode');if(sbMode)sbMode.textContent=d.mode||'—';
+  const sbUp=document.getElementById('sb-uptime');if(sbUp)sbUp.textContent=d.system_uptime||'—';
+  const sbNext=document.getElementById('sb-next');if(sbNext)sbNext.textContent=nextJob;
+  const sbKb=document.getElementById('sb-kb');if(sbKb)sbKb.textContent=(d.knowledge||[]).length;
+  const sbUpd=document.getElementById('sb-updated');if(sbUpd)sbUpd.textContent=(d.timestamp||'').slice(11,19)+' IST';
 
-  wisdomItems=buildWisdom(d);
   document.getElementById('killswitch-banner').style.display=d.kill_switch?'block':'none';
 }
 
-// ── scroll reveal ──
-const _observer=new IntersectionObserver((entries)=>{
-  entries.forEach(entry=>{if(entry.isIntersecting)entry.target.classList.add('revealed');});
-},{threshold:0.1});
-document.querySelectorAll('.chapter').forEach(ch=>_observer.observe(ch));
+let ws=null;
+function connectWS(){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  ws=new WebSocket(`${proto}://${location.host}/ws/${TOKEN}`);
+  ws.onmessage=e=>{try{updateDashboard(JSON.parse(e.data))}catch(_){}};
+  ws.onclose=()=>{setTimeout(connectWS,3000);};
+  ws.onerror=()=>ws.close();
+}
 
-// ── Cosmic starfield ──
-(function(){
-  const canvas=document.getElementById('starfield');if(!canvas)return;
-  const ctx=canvas.getContext('2d');let stars=[];
-  function resize(){canvas.width=window.innerWidth;canvas.height=window.innerHeight;}
-  function initStars(){stars=Array.from({length:140},()=>({
-    x:Math.random()*canvas.width,y:Math.random()*canvas.height,
-    r:Math.random()*1.5+0.5,alpha:Math.random()*0.6+0.1,
-    speed:Math.random()*0.2+0.05,twinkle:Math.random()*Math.PI*2}));}
-  function draw(){
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    const t=Date.now()/1000;
-    stars.forEach(s=>{const a=s.alpha*(0.6+0.4*Math.sin(t*s.speed+s.twinkle));
-      ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(201,168,76,${a*0.7})`;ctx.fill();});
-    requestAnimationFrame(draw);}
-  window.addEventListener('resize',()=>{resize();initStars();});
-  resize();initStars();draw();
-})();
-
-connect();
+function initAll(){
+  initThreeJS();
+  initCursor();
+  const lenis=initLenis();
+  if(lenis&&typeof gsap!=='undefined'){gsap.ticker.add(time=>lenis.raf(time*1000));gsap.ticker.lagSmoothing(0);}
+  initScrollTrigger();
+  startClock();
+  setInterval(updateMarketStatus,30000);
+  updateMarketStatus();
+  connectWS();
+}
 </script>
 </body>
 </html>

@@ -224,6 +224,13 @@ def collect_dashboard_data() -> dict:
                "category": e.category, "is_hypothesis": e.is_hypothesis,
                "count": e.observed_count} for e in knowledge[:7]]
 
+        try:
+            from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+            adaptive_data = AdaptiveThresholds().load()
+        except Exception:
+            adaptive_data = {}
+
         now_ist = datetime.now(IST)
         data = {
             "timestamp": now_ist.isoformat(),
@@ -258,6 +265,7 @@ def collect_dashboard_data() -> dict:
             "intraday_sim": intraday_sim,
             "forced_trades": forced_summary,
             "learning_metrics": learning_metrics,
+            "adaptive_thresholds": adaptive_data,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)

@@ -51,7 +51,7 @@ class AdaptiveThresholds:
         thresholds = self.load()
         return thresholds.get(regime, {}).get("judge_min", 6.5)
 
-    def update_from_forced_trades(self) -> dict:
+    def update_from_all_trades(self) -> dict:
         """Analyzes all forced + simulated trade outcomes by regime and adjusts
         thresholds based on evidence. Returns {regime: {old, new, evidence, win_rate}}
         for regimes that actually changed. Run after each learning cycle — this
@@ -72,7 +72,7 @@ class AdaptiveThresholds:
         by_regime: dict = {}
         for trade in all_trades:
             regime = trade.get("regime", "UNKNOWN")
-            if regime in ("UNKNOWN", "ANY"):
+            if regime in ("UNKNOWN", "ANY", "INTRADAY_SHORT", "HISTORICAL_SIM"):
                 continue
             by_regime.setdefault(regime, {"wins": 0, "total": 0})
             by_regime[regime]["total"] += 1

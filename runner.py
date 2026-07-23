@@ -307,7 +307,7 @@ def daily_learning_job() -> None:
 
     from src.memory.adaptive_thresholds import AdaptiveThresholds
 
-    changes = AdaptiveThresholds().update_from_forced_trades()
+    changes = AdaptiveThresholds().update_from_all_trades()
     if changes:
         change_lines = []
         for regime, c in changes.items():
