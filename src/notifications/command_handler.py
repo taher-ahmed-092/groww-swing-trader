@@ -52,6 +52,7 @@ class CommandHandler:
             "/learning": self._learning, "/forced": self._forced,
             "/force_now": self._force_now, "/report": self._handle_report,
             "/lessons_file": self._handle_lessons_file,
+            "/thresholds": self._handle_thresholds,
         }
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
@@ -676,25 +677,55 @@ class CommandHandler:
         )
         self._send(msg)
 
-    def _generate_improvement_tip(self, summary, forced, sim_wr, regime):
-        """Generates one honest improvement suggestion."""
-        total = summary.get("total_trades", 0)
-        forced_wr = forced.get("win_rate", 0)
+    def _generate_improvement_tip(self, summary, forced, sim_wr, regime, thresholds=None):
+        """Generates honest, specific improvement advice — explains what the
+        adaptive learning loop is actually doing, not a generic tip."""
+        from src.memory.adaptive_thresholds import AdaptiveThresholds
 
-        if total == 0:
-            return ("No real pipeline trades yet. The system is building knowledge. "
-                    "Run /scan daily to find real opportunities.")
-        if forced_wr < 35:
-            return ("Forced trade win rate is low — market is volatile. This is expected. "
-                    "Keep accumulating data. Win rate improves as KB grows.")
-        if regime == "VOLATILE":
-            return ("Market is volatile. System correctly using 50% position size. "
-                    "Wait for RECOVERY or BULL_TRENDING before expecting higher WR.")
-        if sim_wr > 55:
-            return ("Intraday sim win rate is strong. The pipeline signals are working. "
-                    "Run /scan to capture real paper trades.")
-        return ("System is learning. Keep it running daily. After 30 total trades, "
-                "XGBoost activates and prediction quality improves significantly.")
+        thresh = thresholds if thresholds is not None else AdaptiveThresholds().load()
+        regime_data = thresh.get(regime, {})
+        evidence = regime_data.get("evidence", 0)
+        regime_wr = regime_data.get("win_rate", None)
+        current_threshold = regime_data.get("judge_min", 6.5)
+
+        lines = []
+        forced_total = forced.get("total", 0)
+
+        if forced_total < 15:
+            lines.append(
+                f"*Learning phase:* {forced_total}/15 trades needed before adaptive "
+                "thresholds activate. System is accumulating evidence.")
+        elif regime_wr is not None:
+            wr_pct = regime_wr * 100
+            direction = "lowered (easier)" if current_threshold < 6.5 else "raised (harder)"
+            lines.append(
+                f"*Adaptive threshold ({regime}):* {current_threshold:.1f}/10 — "
+                f"{direction} based on {evidence} trades ({wr_pct:.0f}% win rate).")
+
+        if summary.get("total_trades", 0) == 0:
+            lines.append(
+                "*Real pipeline trades:* 0 so far. This is normal — the pipeline "
+                "correctly protects from bad companies (Piotroski F=0) and choppy "
+                "markets (ADX<15). Run /scan at 10AM IST for best results.")
+
+        return "\n".join(lines) if lines else "System is performing as expected."
+
+    def _handle_thresholds(self, args):
+        """adaptive judge thresholds by regime"""
+        from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+        thresholds = AdaptiveThresholds().load()
+        lines = ["📊 *Adaptive Thresholds*", "_(System self-adjusts based on trade outcomes)_\n"]
+        for regime, data in sorted(thresholds.items()):
+            evidence = data.get("evidence", 0)
+            wr = data.get("win_rate", None)
+            threshold = data.get("judge_min", 6.5)
+            default = 6.5
+            diff = threshold - default
+            arrow = "↑" if diff > 0.1 else "↓" if diff < -0.1 else "→"
+            wr_str = f" WR={wr:.0%}" if wr else " (no data yet)"
+            lines.append(f"{arrow} {regime}: {threshold:.1f}/10 ({evidence} trades{wr_str})")
+        self._send("\n".join(lines))
 
     def _handle_lessons_file(self, args):
         """sends the current LESSONS.md"""

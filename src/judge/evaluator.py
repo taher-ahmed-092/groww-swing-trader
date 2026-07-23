@@ -106,9 +106,25 @@ class LLMJudge:
                 "flags": veto,
             }
 
-        # The trading mode is the explicit risk dial and takes precedence over the
-        # enhancer's adaptive tuning for the approval bar.
-        threshold = get_current_mode().judge_threshold
+        # The trading mode sets the risk dial's home base; the adaptive threshold
+        # (learned from forced/simulated trade outcomes by regime) nudges it within
+        # a bounded band so evidence can shift the bar without overriding the mode.
+        # Regime comes from RegimeDetector, NOT market_context (which uses a
+        # different UPTREND/DOWNTREND/SIDEWAYS vocabulary) — RegimeDetector's
+        # BULL_TRENDING/VOLATILE/etc. is the same taxonomy AlwaysOnTrader tags
+        # forced trades with, so the two sides of the loop actually match up.
+        mode = get_current_mode()
+        from src.data.regime_detector import RegimeDetector
+        from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+        try:
+            regime = RegimeDetector().detect().get("regime", "UNKNOWN")
+        except Exception:
+            regime = "UNKNOWN"
+        adaptive_threshold = AdaptiveThresholds().get_judge_threshold(regime)
+        threshold = max(
+            mode.judge_threshold - 0.5,
+            min(mode.judge_threshold + 1.5, adaptive_threshold))
 
         if settings.effective_demo_mode:
             fund = fundamental.get("score", 0) or 0

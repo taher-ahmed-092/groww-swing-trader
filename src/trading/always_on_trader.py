@@ -42,8 +42,8 @@ FORCED_HISTORY_FILE = Path("data/cache/forced_trades_history.json")
 
 
 class AlwaysOnTrader:
-    TARGET_DAILY_TRADES = 20  # aspirational daily learning volume
-    MAX_DAILY_TRADES = 999    # no upper limit — more trades = faster learning
+    TARGET_DAILY_TRADES = 999  # effectively unlimited
+    MAX_DAILY_TRADES = 999     # no upper limit — more trades = faster learning
 
     def __init__(self) -> None:
         self.journal = TradingJournal()
@@ -61,12 +61,14 @@ class AlwaysOnTrader:
         needed = 5
 
         is_market_hours = self._is_market_hours(datetime.now(IST))
+        regime_name = self._current_regime()
         trades: list[dict] = []
         for _ in range(needed):
             trade = (self._place_live_forced_trade() if is_market_hours
                      else self._place_historical_simulation_trade())
             if not trade:
                 continue
+            trade.setdefault("regime", regime_name)
             trades.append(trade)
             self._save_forced_trade(trade)
             # Historical sims close immediately → learn now. Live forced trades are
@@ -337,6 +339,18 @@ class AlwaysOnTrader:
             pass
 
     # ── helpers ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _current_regime() -> str:
+        """Tags every forced trade with the regime it was placed in — without
+        this, the adaptive-thresholds feedback loop (src/memory/adaptive_thresholds.py)
+        has no regime to group evidence by and never adjusts anything."""
+        try:
+            from src.data.regime_detector import RegimeDetector
+
+            return RegimeDetector().detect().get("regime", "UNKNOWN")
+        except Exception:
+            return "UNKNOWN"
+
     @staticmethod
     def _is_market_hours(now: datetime) -> bool:
         total = now.hour * 60 + now.minute

@@ -305,6 +305,20 @@ def daily_learning_job() -> None:
         f"Lessons: {lessons}"
     )
 
+    from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+    changes = AdaptiveThresholds().update_from_forced_trades()
+    if changes:
+        change_lines = []
+        for regime, c in changes.items():
+            direction = "↓ easier" if c["new"] < c["old"] else "↑ harder"
+            change_lines.append(f"{regime}: {c['old']}→{c['new']} ({direction}, WR={c['win_rate']})")
+        console.print(f"[cyan][JOB] adaptive thresholds updated: {changes}[/cyan]")
+        TelegramNotifier().send_message(
+            "🧠 *System Self-Improved*\n"
+            "Thresholds adjusted from trading evidence:\n" + "\n".join(change_lines)
+        )
+
 
 def weekly_distillation_job() -> None:
     if _kill_switch():
