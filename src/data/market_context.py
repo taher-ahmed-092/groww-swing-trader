@@ -91,7 +91,7 @@ class MarketContext:
         above_ma200 = bool(ma200 is not None and price > ma200)
         safe = trend != "DOWNTREND"
 
-        return {
+        context = {
             "nifty_trend": trend,
             "nifty_rsi": rsi,
             "nifty_above_ma200": above_ma200,
@@ -101,6 +101,23 @@ class MarketContext:
                 f"{'safe to buy' if safe else 'AVOID buys (downtrend)'}"
             ),
         }
+
+        # Institutional flow + economic calendar — real-time edge beyond EOD prices.
+        try:
+            from src.data.realtime_feeds import EconomicCalendar, FIIDIIFeed
+
+            fiidii = FIIDIIFeed().get_latest()
+            context["fii_dii_signal"] = fiidii.get("signal", "NEUTRAL")
+            context["fii_dii_reason"] = fiidii.get("signal_reason", "")
+            context["fii_net_crore"] = fiidii.get("fii_net_crore", 0)
+
+            should_reduce, reason = EconomicCalendar().should_reduce_size()
+            if should_reduce:
+                context["economic_event_flag"] = reason
+        except Exception:
+            pass
+
+        return context
 
     def get_sector_performance(self, sector: str) -> dict:
         none_dict = {

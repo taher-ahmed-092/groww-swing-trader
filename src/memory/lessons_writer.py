@@ -18,6 +18,25 @@ from src.memory.journal import TradingJournal
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def _is_loss(desc: str) -> bool:
+    return "LOST" in desc or "LOSS" in desc
+
+
+def _is_win(desc: str) -> bool:
+    # Regime patterns use "WON"/"LOST"; FORCED_LEARNING patterns use "WIN"/"LOSS"
+    # instead — checking only "WON" left every forced-trade WIN entry falling
+    # through to the else-branch and rendering a ❌.
+    return not _is_loss(desc) and ("WON" in desc or "WIN" in desc)
+
+
+def _icon_for(desc: str) -> str:
+    if _is_loss(desc):
+        return "❌"
+    if _is_win(desc):
+        return "✅"
+    return "◆"
+
+
 class LessonsWriter:
     OUTPUT_FILE = Path("LESSONS.md")
 
@@ -66,15 +85,15 @@ class LessonsWriter:
             regime_patterns.setdefault(regime, []).append(e)
 
         for regime, patterns in sorted(regime_patterns.items()):
-            wins = [p for p in patterns if "WON" in p.pattern_description]
-            losses = [p for p in patterns if "LOST" in p.pattern_description]
+            wins = [p for p in patterns if _is_win(p.pattern_description)]
+            losses = [p for p in patterns if _is_loss(p.pattern_description)]
             lines.append(f"\n### {regime} ({len(wins)} wins, {len(losses)} losses)")
             for p in sorted(patterns, key=lambda x: -x.confidence)[:5]:
-                icon = "✅" if "WON" in p.pattern_description else "❌"
+                icon = _icon_for(p.pattern_description)
                 lines.append(f"- {icon} [{p.confidence:.0%}] {p.pattern_description[:80]}")
 
         lines += ["", "## What Works (High Confidence Patterns)"]
-        high_conf = [e for e in kb if e.confidence >= 0.7 and "WON" in e.pattern_description]
+        high_conf = [e for e in kb if e.confidence >= 0.7 and _is_win(e.pattern_description)]
         if high_conf:
             for e in sorted(high_conf, key=lambda x: -x.confidence)[:10]:
                 lines.append(f"- [{e.confidence:.0%}] {e.pattern_description[:80]}")
@@ -82,7 +101,7 @@ class LessonsWriter:
             lines.append("- Still accumulating. Need more trades to establish high-confidence rules.")
 
         lines += ["", "## What Doesn't Work (Loss Patterns to Avoid)"]
-        high_loss = [e for e in kb if e.confidence >= 0.6 and "LOST" in e.pattern_description]
+        high_loss = [e for e in kb if e.confidence >= 0.6 and _is_loss(e.pattern_description)]
         if high_loss:
             for e in sorted(high_loss, key=lambda x: -x.confidence)[:10]:
                 lines.append(f"- [{e.confidence:.0%}] {e.pattern_description[:80]}")
@@ -153,14 +172,14 @@ class LessonsWriter:
                     f"Forced trade win rate is strong ({wr:.0%}). The market is cooperative. "
                     "Good time to run /scan for higher-quality real trades.")
 
-        loss_patterns = [e for e in kb if "LOST" in e.pattern_description and e.confidence >= 0.80]
+        loss_patterns = [e for e in kb if _is_loss(e.pattern_description) and e.confidence >= 0.80]
         if loss_patterns:
             top_loss = loss_patterns[0]
             recs.append(
                 f"Consistent loss pattern detected: {top_loss.pattern_description[:60]}. "
                 "Consider adding this as an auto-veto rule.")
 
-        win_patterns = [e for e in kb if "WON" in e.pattern_description and e.confidence >= 0.80]
+        win_patterns = [e for e in kb if _is_win(e.pattern_description) and e.confidence >= 0.80]
         if win_patterns:
             top_win = win_patterns[0]
             recs.append(

@@ -19,9 +19,10 @@ def test_final_command_count_16():
     # The spec's own enumerated command set (/start /report /scan /positions
     # /trades /learn /chart /mode /trade /regime /brief /watchlist /alert
     # /pause /kill /reset_kill /dashboard) lists 17 commands despite the "16"
-    # header label — the concrete list is the ground truth.
+    # header label — the concrete list is the ground truth. A later session
+    # explicitly asked to add /flows and /diagnose on top of that 17.
     h = _handler()
-    assert len(h._MENU) == 17
+    assert len(h._MENU) == 19
 
 
 def test_old_commands_redirect():

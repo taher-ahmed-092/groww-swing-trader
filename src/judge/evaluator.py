@@ -245,13 +245,40 @@ class LLMJudge:
             ml_prob = SignalCombiner().predict_win_probability(state)
         except Exception:
             ml_prob = None
-        if ml_prob is not None:
-            blended = 0.6 * (overall / 10) + 0.4 * ml_prob
-            if abs((overall / 10) - ml_prob) > 0.3:
+
+        # Random Forest (trained on simulation data — activates far earlier
+        # than XGBoost, which needs 30+ REAL trades that don't exist yet).
+        try:
+            from src.ml.random_forest_model import RandomForestModel
+
+            from src.data.watchlist import ALL_STOCKS
+
+            rf_indicators = technical.get("indicators", {}) or {}
+            rf_meta = {"tier": ALL_STOCKS.get(state.get("symbol", ""), {}).get("tier", "large"),
+                      "signal_score": technical.get("score", 0.5)}
+            rf_prob = RandomForestModel().predict_win_probability(rf_indicators, rf_meta)
+        except Exception:
+            rf_prob = None
+
+        combined_ml = None
+        if rf_prob is not None and ml_prob is not None:
+            combined_ml = 0.5 * rf_prob + 0.5 * ml_prob
+        elif rf_prob is not None:
+            combined_ml = rf_prob
+        elif ml_prob is not None:
+            combined_ml = ml_prob
+
+        if combined_ml is not None:
+            blended = 0.55 * (overall / 10) + 0.45 * combined_ml
+            if abs((overall / 10) - combined_ml) > 0.3:
                 flags.append("ML_JUDGE_DISAGREEMENT")
             overall = round(blended * 10, 2)
-            verdict["reasoning"] = (verdict.get("reasoning", "")
-                                    + f" | ML model: {ml_prob:.0%} win probability")
+            reasoning_bits = verdict.get("reasoning", "")
+            if ml_prob is not None:
+                reasoning_bits += f" | XGBoost: {ml_prob:.0%} win probability"
+            if rf_prob is not None:
+                reasoning_bits += f" | RF model: {rf_prob:.0%} win probability"
+            verdict["reasoning"] = reasoning_bits
 
         verdict["flags"] = flags
         verdict["overall_score"] = round(overall, 4)

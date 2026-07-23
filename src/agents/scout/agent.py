@@ -183,6 +183,19 @@ class ScoutAgent:
         if not self._passes_liquidity_check(df, tier):
             return None
 
+        # Auto-extracted rules (src/memory/auto_rules.py) — the KB→behavior
+        # feedback loop. A high-confidence stock veto skips scoring entirely;
+        # a lower-confidence one still scores but takes a penalty.
+        from src.memory.auto_rules import AutoRuleExtractor
+
+        rules = AutoRuleExtractor.load()
+        score_penalty = 0.0
+        if symbol in rules.get("stock_vetoes", {}):
+            veto = rules["stock_vetoes"][symbol]
+            if veto.get("confidence", 0) >= 0.85:
+                return None
+            score_penalty = -3
+
         ind = compute_indicators(df)
         meta = WATCHLIST.get(symbol, {"name": symbol, "sector": "Unknown"})
         price = float(df["Close"].iloc[-1])
@@ -302,6 +315,66 @@ class ScoutAgent:
             if not strong:
                 score -= 2
                 flags.append("SMALLCAP_WEAK_SIGNAL")
+
+        # Auto-extracted setup-level rules (RSI range + ADX + optional trend).
+        adx_signal = ind.get("adx_signal", "NEUTRAL") or "NEUTRAL"
+        trend_signal = "UPTREND" if (ind.get("ma_50") and price > ind["ma_50"]) else "SIDEWAYS"
+        for veto in rules.get("setup_vetoes", []):
+            if (veto.get("rsi_min", 0) <= (rsi or 50) <= veto.get("rsi_max", 100)
+                    and veto.get("adx_signal", "") == adx_signal
+                    and (not veto.get("trend") or veto.get("trend") == trend_signal)):
+                score_penalty -= 2
+                flags.append("LEARNED_VETO")
+                reasons.append(f"Learned veto: {veto.get('reason', '')}")
+                break
+
+        score_bonus = 0.0
+        for boost in rules.get("setup_boosts", []):
+            if (boost.get("rsi_min", 0) <= (rsi or 50) <= boost.get("rsi_max", 100)
+                    and boost.get("adx_signal", "") == adx_signal):
+                score_bonus = boost.get("bonus", 0)
+                break
+        if symbol in rules.get("stock_boosts", {}):
+            score_bonus += rules["stock_boosts"][symbol].get("bonus", 0)
+            flags.append("MEMORY_BOOST")
+
+        score = score + score_penalty + score_bonus
+
+        # NSE pre-open order imbalance (9:00-9:15 AM only) — a real-time signal
+        # beyond end-of-day prices.
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+            if 9 <= now_ist.hour < 10:
+                from src.data.realtime_feeds import NSEPreOpenFeed
+
+                imbalance = NSEPreOpenFeed().get_imbalance_for_stock(symbol)
+                if imbalance > 20:
+                    score += 1
+                    flags.append(f"PREOPEN_BUY_IMBALANCE_{imbalance:.0f}%")
+                elif imbalance < -20:
+                    score -= 1
+                    flags.append("PREOPEN_SELL_IMBALANCE")
+        except Exception:
+            pass
+
+        # Bayesian per-stock win prior (src/ml/stock_priors.py) — a stock with
+        # a strong track record in simulation gets a small nudge; conservative
+        # until 5+ observations exist.
+        from src.ml.stock_priors import StockPriors
+
+        priors = StockPriors()
+        prior = priors.get_win_prior(symbol)
+        stats = priors.get_stats(symbol)
+        if stats.get("total", 0) >= 5:
+            prior_adjustment = (prior - 0.5) * 4  # maps 0-1 -> -2..+2
+            score += prior_adjustment * 0.3
+            if prior < 0.35:
+                flags.append("STOCK_TRACK_RECORD_POOR")
+            elif prior > 0.65:
+                flags.append("STOCK_TRACK_RECORD_STRONG")
 
         return {
             "symbol": symbol,

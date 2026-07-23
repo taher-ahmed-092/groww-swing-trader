@@ -296,6 +296,47 @@ def collect_dashboard_data() -> dict:
         except Exception:
             pro_metrics = {"status": "no_data"}
 
+        try:
+            from src.data.realtime_feeds import EconomicCalendar, FIIDIIFeed
+
+            fii_dii = FIIDIIFeed().get_latest()
+            upcoming_events = EconomicCalendar().get_upcoming(14)
+        except Exception:
+            fii_dii, upcoming_events = {}, []
+
+        try:
+            from src.memory.auto_rules import AutoRuleExtractor
+
+            auto_rules = {"total": AutoRuleExtractor.load().get("total_rules", 0)}
+        except Exception:
+            auto_rules = {"total": 0}
+
+        try:
+            from src.ml.random_forest_model import MODEL_FILE as RF_MODEL_FILE
+            from src.ml.random_forest_model import RandomForestModel
+
+            rf_model = {"available": RF_MODEL_FILE.exists(),
+                       "importance": RandomForestModel().get_feature_importance()}
+        except Exception:
+            rf_model = {"available": False, "importance": {}}
+
+        try:
+            import json as _json2
+
+            from src.ml.stock_priors import PRIORS_FILE
+
+            stock_priors_count = (len(_json2.loads(PRIORS_FILE.read_text()))
+                                  if PRIORS_FILE.exists() else 0)
+        except Exception:
+            stock_priors_count = 0
+
+        try:
+            from src.ml.signal_combiner import MODEL_FILE as XGB_MODEL_FILE
+
+            xgb_available = XGB_MODEL_FILE.exists()
+        except Exception:
+            xgb_available = False
+
         now_ist = datetime.now(IST)
         data = {
             "timestamp": now_ist.isoformat(),
@@ -334,6 +375,12 @@ def collect_dashboard_data() -> dict:
             "combined_totals": combined_totals,
             "professional_metrics": pro_metrics,
             "funny_line": funny_line,
+            "fii_dii": fii_dii,
+            "upcoming_events": upcoming_events,
+            "auto_rules": auto_rules,
+            "rf_model": rf_model,
+            "xgb_available": xgb_available,
+            "stock_priors_count": stock_priors_count,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)

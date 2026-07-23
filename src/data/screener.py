@@ -12,6 +12,7 @@ volume low (the weekly scan touches only a handful of symbols).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,7 @@ from bs4 import BeautifulSoup
 from rich.console import Console
 
 console = Console()
+log = logging.getLogger(__name__)
 
 _CACHE_DIR = os.path.join("data", "cache")
 _CACHE_TTL_SECONDS = 24 * 60 * 60  # 24 hours
@@ -182,6 +184,8 @@ class ScreenerScraper:
 
         html = self._fetch_html(symbol)
         if not html:
+            log.warning("screener.in returned empty for %s — fundamental will use "
+                       "neutral 0.50 score", symbol)
             return None
 
         try:

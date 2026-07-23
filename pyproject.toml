@@ -43,7 +43,7 @@ dependencies = [
 #   ml  — xgboost signal combiner (no Android wheel; also pulls ~300MB nvidia-nccl
 #         on Linux; only activates after 30+ closed trades)
 #   nlp — local FinBERT via transformers (pulls Rust tokenizers/safetensors)
-ml = ["xgboost>=2.0.0"]
+ml = ["xgboost>=2.0.0", "scikit-learn>=1.3.0", "joblib>=1.3.0"]
 nlp = ["transformers>=5.12.0"]
 
 [dependency-groups]

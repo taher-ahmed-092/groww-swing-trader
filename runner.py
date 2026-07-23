@@ -332,6 +332,27 @@ def daily_learning_job() -> None:
             "Consider reviewing LESSONS.md for what changed."
         )
 
+    from src.memory.auto_rules import AutoRuleExtractor
+
+    rules = AutoRuleExtractor().extract_and_save()
+    console.print(f"[cyan][JOB] Auto-rules updated: {rules['total_rules']} rules[/cyan]")
+    if rules["total_rules"] > 0:
+        veto_count = len(rules["stock_vetoes"])
+        boost_count = len(rules["stock_boosts"])
+        TelegramNotifier().send_message(
+            "🤖 *Auto-rules updated from learning*\n"
+            f"Stocks to avoid: {veto_count}\n"
+            f"Stocks to prefer: {boost_count}\n"
+            f"Setup patterns: {len(rules['setup_vetoes'])} vetoes, "
+            f"{len(rules['setup_boosts'])} boosts\n"
+            f"Total active rules: {rules['total_rules']}"
+        )
+
+    from src.ml.stock_priors import StockPriors
+
+    StockPriors().compute_and_save()
+    console.print("[cyan][JOB] Stock priors recomputed[/cyan]")
+
 
 def weekly_distillation_job() -> None:
     if _kill_switch():
@@ -571,6 +592,30 @@ def deep_replay_job() -> None:
     result = HistoricalReplayEngine().run_batch(n_stocks=50, n_days_each=15)
     console.print(f"[cyan][JOB] deep replay: {result}[/cyan]")
     daily_lessons_job()
+    rf_train_job()
+
+
+def rf_train_job() -> None:
+    """Sunday 9:30 PM IST (also called after deep_replay_job, which is when
+    enough fresh simulation data exists) — train the Random Forest model."""
+    if _kill_switch():
+        return
+    from src.ml.random_forest_model import RandomForestModel
+
+    result = RandomForestModel().train()
+    if result.get("trained"):
+        imp = result.get("top_features", [])
+        top_f = ", ".join(f"{f}={v}" for f, v in imp[:3])
+        console.print(f"[cyan][JOB] Random Forest trained: {result}[/cyan]")
+        TelegramNotifier().send_message(
+            "🌲 *Random Forest Updated*\n"
+            f"Trained on {result['n_samples']} sim trades\n"
+            f"Validation accuracy: {result['val_accuracy']:.0%}\n"
+            f"Key signals: {top_f}\n"
+            "_(Combined with judge for better decisions)_"
+        )
+    else:
+        console.print(f"[yellow][JOB] Random Forest not trained: {result}[/yellow]")
 
 
 def daily_lessons_job() -> None:
@@ -729,6 +774,7 @@ if __name__ == "__main__":
     scheduler.add_job(off_hours_replay_job, "cron", hour="*/2", minute=15)
     scheduler.add_job(deep_replay_job, "cron", hour=23, minute=30)
     scheduler.add_job(daily_lessons_job, "cron", hour=23, minute=0)
+    scheduler.add_job(rf_train_job, "cron", day_of_week="sun", hour=21, minute=30)
     scheduler.add_job(forced_trade_job, "cron", minute="*/15")
     scheduler.add_job(forced_close_job, "cron", minute="7,22,37,52")
     scheduler.add_job(daily_forced_summary_job, "cron", day_of_week="mon-fri", hour=16, minute=0)

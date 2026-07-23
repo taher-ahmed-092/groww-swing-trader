@@ -84,6 +84,8 @@ class CommandHandler:
             "/kill": self._kill,
             "/reset_kill": self._reset_kill,
             "/dashboard": self._dashboard_link,
+            "/flows": self._handle_flows,
+            "/diagnose": self._handle_diagnose,
         }
         # Old commands still resolve (never break a typed habit) but redirect.
         for old_cmd in self._REDIRECTS:
@@ -111,6 +113,8 @@ class CommandHandler:
         ("/kill", "Emergency stop (confirm required)"),
         ("/reset_kill", "Resume after kill switch"),
         ("/dashboard", "Private dashboard link"),
+        ("/flows", "Institutional flows + economic calendar"),
+        ("/diagnose", "Why real trades aren't clearing the pipeline"),
     ]
 
     def setup(self) -> None:
@@ -484,6 +488,23 @@ class CommandHandler:
             thresh_lines.append(f"  {arrow} {regime}: {data.get('judge_min', 6.5):.1f}/10 "
                                 f"({data.get('evidence', 0)}t)")
         signals = SignalTracker().get_best_signals() or "No signal-accuracy data yet."
+
+        try:
+            import json as _json
+
+            from src.ml.stock_priors import PRIORS_FILE
+
+            all_priors = {}
+            if PRIORS_FILE.exists():
+                all_priors = _json.loads(PRIORS_FILE.read_text())
+            qualified = {s: d for s, d in all_priors.items() if d.get("total", 0) >= 5}
+            best = sorted(qualified.items(), key=lambda x: -x[1]["posterior_win_prob"])[:5]
+            worst = sorted(qualified.items(), key=lambda x: x[1]["posterior_win_prob"])[:5]
+            best_text = ", ".join(f"{s} ({d['posterior_win_prob']:.0%})" for s, d in best) or "n/a"
+            worst_text = ", ".join(f"{s} ({d['posterior_win_prob']:.0%})" for s, d in worst) or "n/a"
+        except Exception:
+            best_text = worst_text = "n/a"
+
         self._send(
             "📚 *Learning Status*\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -491,6 +512,8 @@ class CommandHandler:
             f"*Top Patterns:*\n{top_text}\n\n"
             f"*Adaptive Thresholds:*\n" + "\n".join(thresh_lines) + "\n\n"
             f"*Signal accuracy:*\n{signals}\n\n"
+            f"*Best-performing stocks:* {best_text}\n"
+            f"*Worst-performing stocks:* {worst_text}\n\n"
             "_/learn full sends LESSONS.md._")
 
     def _cmd_chart(self, args):
@@ -1013,6 +1036,43 @@ class CommandHandler:
             LessonsWriter().write()
         content = lf.read_text()[:3000]
         self._send(f"```\n{content}\n```")
+
+    def _handle_flows(self, args):
+        """institutional flows + economic calendar"""
+        from src.data.realtime_feeds import EconomicCalendar, FIIDIIFeed
+
+        fiidii = FIIDIIFeed().get_latest()
+        upcoming = EconomicCalendar().get_upcoming(days_ahead=14)
+        fii = fiidii.get("fii_net_crore", 0)
+        dii = fiidii.get("dii_net_crore", 0)
+        signal = fiidii.get("signal", "NEUTRAL")
+        emoji = "🟢" if signal == "BULLISH" else "🔴" if signal == "BEARISH" else "🟡"
+        lines = [
+            "💹 *Institutional Flows + Calendar*",
+            "━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"*FII:* {fii:+,.0f} Cr {emoji}",
+            f"*DII:* {dii:+,.0f} Cr",
+            f"*Signal:* {fiidii.get('signal_reason', '')}",
+            "",
+            "*Upcoming Events:*",
+        ]
+        for ev in upcoming[:5]:
+            impact_emoji = "🚨" if ev["impact"] == "HIGH" else "⚠️"
+            lines.append(f"{impact_emoji} *{ev['event']}* — {ev['days_away']}d away")
+        if not upcoming:
+            lines.append("No major events in next 14 days ✅")
+        self._send("\n".join(lines))
+
+    def _handle_diagnose(self, args):
+        """runs diagnose.py — why real trades aren't clearing the pipeline"""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/diagnose.py"],
+            capture_output=True, text=True, timeout=60, cwd=".")
+        output = result.stdout[-3000:] if result.stdout else (result.stderr or "")[-3000:]
+        self._send(f"```\n{output}\n```")
 
     def _pairs(self, args):
         """pairs opportunities"""

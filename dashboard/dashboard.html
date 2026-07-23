@@ -241,6 +241,7 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     <span class="regime-name" id="regime-name">—</span>
     <span class="hud-metric" id="nifty-price">NIFTY —</span>
     <span class="hud-metric" id="rsi-value">RSI —</span>
+    <span class="hud-metric" id="fii-dii-badge">🟡 FII/DII —</span>
     <span class="funny-line" id="funny-line">Reading the market's mood...</span>
   </div>
 
@@ -324,6 +325,16 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     </div>
     <div class="xgb-track"><div class="xgb-fill" id="xgb-fill"></div></div>
     <div class="thresholds-mini" id="thresholds-grid"></div>
+
+    <div style="margin-top:24px">
+      <div class="room__sub" style="font-weight:700;color:var(--text);margin-bottom:10px">🤖 AI Models Active</div>
+      <div class="engine-grid" id="ai-models-grid" style="font-family:var(--font-mono);font-size:12px">
+        <div class="stat-tile"><div id="rf-status" style="font-size:16px">⏳</div><div class="stat-tile__label">Random Forest</div></div>
+        <div class="stat-tile"><div id="xgb-status" style="font-size:16px">⏳</div><div class="stat-tile__label">XGBoost</div></div>
+        <div class="stat-tile"><div class="stat-tile__num" id="auto-rules-count">0</div><div class="stat-tile__label">Auto-Rules</div></div>
+      </div>
+      <div id="top-feature-line" style="font-family:var(--font-body);font-size:13px;color:var(--text-muted);margin-top:8px"></div>
+    </div>
 
     <div style="margin-top:24px">
       <div class="room__sub" style="font-weight:700;color:var(--text);margin-bottom:10px">🔬 Why Trades Are Failing</div>
@@ -862,6 +873,31 @@ function updateDashboard(d){
 
   updateThresholds(adaptive,regime);
   updateLossDiagnosis(adaptive);
+
+  const fiiDii=d.fii_dii||{};
+  const fdSignal=fiiDii.signal||'NEUTRAL';
+  const fdEmoji=fdSignal==='BULLISH'?'🟢':fdSignal==='BEARISH'?'🔴':'🟡';
+  const fdEl=document.getElementById('fii-dii-badge');
+  if(fdEl)fdEl.textContent=`${fdEmoji} FII ${(fiiDii.fii_net_crore||0)>=0?'+':''}${fiiDii.fii_net_crore||0}Cr`;
+
+  const rfModel=d.rf_model||{};
+  const rfEl=document.getElementById('rf-status');
+  if(rfEl)rfEl.textContent=rfModel.available?'✅ Active':'⏳ Training';
+  const xgbEl=document.getElementById('xgb-status');
+  if(xgbEl)xgbEl.textContent=d.xgb_available?'✅ Active':'⏳ Training';
+  const arEl=document.getElementById('auto-rules-count');
+  if(arEl)arEl.textContent=(d.auto_rules||{}).total||0;
+  const topFeatEl=document.getElementById('top-feature-line');
+  if(topFeatEl){
+    const importance=rfModel.importance||{};
+    const entries=Object.entries(importance).sort((a,b)=>b[1]-a[1]);
+    if(entries.length){
+      const[topName,topVal]=entries[0];
+      topFeatEl.textContent=`💡 ${topName} is your most predictive indicator (${(topVal*100).toFixed(0)}% importance)`;
+    }else{
+      topFeatEl.textContent='';
+    }
+  }
 
   const pm=d.professional_metrics||{};
   if(pm.status!=='no_data'){

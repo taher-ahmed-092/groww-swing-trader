@@ -200,6 +200,16 @@ class RiskChecker:
             quantity = max(1, int(position_size_inr / entry_price))
             sizing["position_size_inr"] = position_size_inr
             sizing["quantity"] = quantity
+
+        # Economic-event size reduction — halve size ahead of a HIGH-impact
+        # RBI/GDP/CPI release (src/data/realtime_feeds.py EconomicCalendar).
+        event_flag = (state.get("market_context") or {}).get("economic_event_flag")
+        if event_flag and entry_price:
+            position_size_inr = round(position_size_inr * 0.5, 2)
+            quantity = max(1, int(position_size_inr / entry_price))
+            sizing["position_size_inr"] = position_size_inr
+            sizing["quantity"] = quantity
+            sizing["sizing_explanation"] = sizing.get("sizing_explanation", "") + f" | {event_flag}"
             sizing["sizing_explanation"] = (
                 sizing.get("sizing_explanation", "") + f" | circuit-breaker ×{cb_factor}")
 
