@@ -94,6 +94,21 @@ class ExecutorAgent:
         # 4. Journal the execution.
         self.journal.log_executed(record.id, result)
 
+        # Live dashboard trade-plane animation (best-effort — the dashboard may
+        # not be running as a separate process; never blocks execution).
+        try:
+            import asyncio
+
+            from dashboard.server import broadcast_trade_event
+
+            asyncio.run(broadcast_trade_event("TRADE_OPENED", {
+                "symbol": decision["symbol"], "entry": result.get("fill_price") or decision["price"],
+                "stop": decision["stop_price"], "target": decision["target_price"],
+                "source": "real",
+            }))
+        except Exception:
+            pass
+
         # 5. Return the result (carry the journal trade_id for downstream RCA/closure).
         result["trade_id"] = record.id
         return result

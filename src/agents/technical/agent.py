@@ -125,6 +125,20 @@ class TechnicalAgent:
             "flags": flags,
         }
 
+        # Recall specific past memories resembling this exact setup — the
+        # micro-level complement to AdaptiveThresholds' macro regime strictness.
+        from src.memory.pattern_matcher import PatternMatcher
+
+        recall = PatternMatcher().recall(symbol, indicators, regime)
+
+        def _apply_recall(verdict: dict) -> dict:
+            verdict["memory_recall"] = recall
+            verdict["reasoning"] = (verdict.get("reasoning", "") + f" | {recall['summary']}")
+            # recall['adjustment'] is on a 0-10 scale; this verdict's score is 0-1.
+            verdict["score"] = round(
+                max(0.0, min(1.0, (verdict.get("score", 0) or 0) + recall["adjustment"] / 10)), 4)
+            return verdict
+
         def _enforce_weekly(verdict: dict) -> dict:
             # Never fight the weekly trend: downgrade a BUY to HOLD in a weekly downtrend.
             if weekly_trend == "DOWNTREND" and verdict.get("signal") == "BUY":
@@ -154,6 +168,7 @@ class TechnicalAgent:
                 )
                 verdict["reasoning"] = f"Strategy: {strategy_name} — " + verdict.get("reasoning", "")
             verdict.update(base)
+            verdict = _apply_recall(verdict)
             return _enforce_weekly(verdict)
 
         fundamental = state.get("fundamental_verdict", {})
@@ -223,4 +238,5 @@ class TechnicalAgent:
         verdict.update(base)
         # Merge any LLM-emitted flags with code-derived flags.
         verdict["flags"] = list({*flags, *verdict.get("flags", [])})
+        verdict = _apply_recall(verdict)
         return _enforce_weekly(verdict)

@@ -146,6 +146,27 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 .parachute{position:absolute;font-size:24px;animation:parachutePop .4s ease forwards}
 @keyframes parachutePop{0%{transform:scale(0) translateY(-10px);opacity:0}
   60%{transform:scale(1.2) translateY(0);opacity:1}100%{transform:scale(1) translateY(0);opacity:1}}
+.trade-plane__banner .src-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+
+/* ── Lesson modal ── */
+.lesson-modal{position:fixed;inset:0;z-index:700;display:flex;align-items:center;justify-content:center;
+  background:rgba(10,4,20,.6);backdrop-filter:blur(4px)}
+.lesson-modal.hidden{display:none}
+.lesson-modal__card{position:relative;max-width:440px;width:90%;background:var(--panel-bg);
+  backdrop-filter:blur(20px);border:2px solid var(--panel-border);border-radius:20px;padding:28px;
+  animation:modalScaleIn .25s ease}
+@keyframes modalScaleIn{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+.lesson-modal__close{position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text);
+  font-size:18px;cursor:pointer;font-family:var(--font-display)}
+.lesson-modal__icon{font-size:40px;margin-bottom:10px}
+.lesson-modal__desc{font-family:var(--font-display);font-weight:700;font-size:17px;margin-bottom:14px}
+.lesson-modal__meta{font-family:var(--font-body);font-size:13px;color:var(--text-muted);line-height:1.7}
+
+/* ── Legend ── */
+.legend-row{display:flex;flex-wrap:wrap;gap:14px;font-family:var(--font-mono);font-size:11px;
+  color:var(--text-muted);margin-top:10px}
+.legend-row .legend-item{display:flex;align-items:center;gap:5px}
+.legend-swatch{display:inline-block;width:10px;height:10px;border-radius:50%}
 </style>
 </head>
 <body>
@@ -154,6 +175,15 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 <div class="warp-flash" id="warp-flash"></div>
 <div id="killswitch-banner">🚨 KILL SWITCH ACTIVE — all trading halted</div>
 <button id="enable-tilt" class="tilt-btn">🎮 Enable Tilt</button>
+
+<div id="lesson-modal" class="lesson-modal hidden">
+  <div class="lesson-modal__card">
+    <button class="lesson-modal__close">✕</button>
+    <div class="lesson-modal__icon" id="lm-icon"></div>
+    <div class="lesson-modal__desc" id="lm-desc"></div>
+    <div class="lesson-modal__meta" id="lm-meta"></div>
+  </div>
+</div>
 
 <header class="site-head">
   <div class="site-head__mark">🚀 COSMIC PUNK</div>
@@ -190,6 +220,13 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
   <div class="panel flight-log">
     <div class="flight-log__title">📡 Flight Log</div>
     <div id="flight-log-list"><div class="flight-log__item">Waiting for the first trade...</div></div>
+    <div class="legend-row">
+      <span class="legend-item"><span class="legend-swatch" style="background:#ffd93d"></span>✈️ Real</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#4dd8ff"></span>✈️ Forced</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#3ddc97"></span>✈️ Intraday</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#ff6ec7"></span>✈️ Short</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#c9c9d9"></span>📡 Replay squadron</span>
+    </div>
   </div>
 </section>
 
@@ -213,7 +250,13 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
   <div class="room__sub">Every trade is a data point. Every pattern is a lesson.</div>
   <div class="room3-grid">
     <div class="panel">
-      <canvas id="pnl-chart" height="180"></canvas>
+      <div class="legend-row" style="margin-top:0;margin-bottom:10px">
+        <span class="legend-item"><span class="legend-swatch" style="background:#ffd93d"></span>Real</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#4dd8ff"></span>Forced</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#3ddc97"></span>Intraday</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#ff6ec7"></span>Short</span>
+      </div>
+      <div id="pnl-chart-wrap"><canvas id="pnl-chart" height="180"></canvas></div>
       <div class="wl-pattern" id="wl-pattern"></div>
     </div>
     <div class="panel">
@@ -345,60 +388,123 @@ document.addEventListener('mousemove',e=>{
 });
 
 // ── Trade flight animation ──
+const EDGE_START={
+  left:()=>({x:-60,y:80+Math.random()*(innerHeight-300)}),
+  right:()=>({x:innerWidth+60,y:80+Math.random()*(innerHeight-300)}),
+  top:()=>({x:80+Math.random()*(innerWidth-200),y:-60}),
+  bottom:()=>({x:80+Math.random()*(innerWidth-200),y:innerHeight+60}),
+  'top-left':()=>({x:-60,y:-60}),
+  'top-right':()=>({x:innerWidth+60,y:-60}),
+  'bottom-left':()=>({x:-60,y:innerHeight+60}),
+  'bottom-right':()=>({x:innerWidth+60,y:innerHeight+60}),
+};
+const _planeQueue=[];let _lastLaunch=0;
 function launchTradePlane(event){
+  _planeQueue.push(event);
+  _drainPlaneQueue();
+}
+function _drainPlaneQueue(){
+  if(!_planeQueue.length)return;
+  const now=performance.now();
+  if(now-_lastLaunch<700){setTimeout(_drainPlaneQueue,700-(now-_lastLaunch));return;}
+  _lastLaunch=now;
+  const event=_planeQueue.shift();
+  if(event.type==='SQUADRON'){_launchSquadron(event);}
+  else{_launchSinglePlane(event);}
+  addFlightLogEntry(event);
+  if(_planeQueue.length)setTimeout(_drainPlaneQueue,700);
+}
+
+function _launchSinglePlane(event){
   const layer=document.getElementById('flight-layer');
+  const edges=Object.keys(EDGE_START);
+  const edge=edges[Math.floor(Math.random()*edges.length)];
+  const start=EDGE_START[edge]();
+  const color=SOURCE_COLORS[event.source]||'#ffd93d';
+  const srcLabel={real:'REAL',forced:'FORCED',intraday:'SIM',short:'SHORT'}[event.source]||'FORCED';
+
   const plane=document.createElement('div');
   plane.className='trade-plane';plane.textContent='✈️';
-  const startY=80+Math.random()*(innerHeight-300);
-  plane.style.left='-60px';plane.style.top=startY+'px';
+  plane.style.left=start.x+'px';plane.style.top=start.y+'px';
+
   const banner=document.createElement('div');
   banner.className='trade-plane__banner';
-  banner.textContent=`${event.symbol} · ₹${(event.entry||0).toFixed(0)}`;
+  banner.style.borderColor=color;
+  banner.innerHTML=`<span class="src-dot" style="background:${color}"></span>${srcLabel} `+
+    `${event.symbol} · ₹${(event.entry||0).toFixed(0)}`;
   plane.appendChild(banner);layer.appendChild(plane);
 
-  const midX=innerWidth*0.55;
+  const midX=innerWidth*0.5+(Math.random()-0.5)*innerWidth*0.2;
+  const midY=innerHeight*0.4+(Math.random()-0.5)*innerHeight*0.2;
   plane.animate([
-    {transform:'translateX(0) translateY(0) rotate(0deg)'},
-    {transform:`translateX(${midX}px) translateY(-20px) rotate(3deg)`}
+    {transform:`translate(${0}px,${0}px) rotate(0deg)`},
+    {transform:`translate(${midX-start.x}px,${midY-start.y}px) rotate(3deg)`}
   ],{duration:1800,easing:'ease-out',fill:'forwards'});
 
   setTimeout(()=>{
-    if(event.type==='TRADE_CLOSED'){handleCloseAnimation(plane,banner,event,midX);}
+    if(event.type==='TRADE_CLOSED'){handleCloseAnimation(plane,banner,event,midX-start.x,midY-start.y);}
     else{
+      const dx=midX-start.x,dy=midY-start.y;
       plane.animate([
-        {transform:`translateX(${midX}px) translateY(-20px) rotate(3deg)`},
-        {transform:`translateX(${midX}px) translateY(-30px) rotate(-2deg)`},
-        {transform:`translateX(${midX}px) translateY(-20px) rotate(3deg)`}
+        {transform:`translate(${dx}px,${dy}px) rotate(3deg)`},
+        {transform:`translate(${dx}px,${dy-10}px) rotate(-2deg)`},
+        {transform:`translate(${dx}px,${dy}px) rotate(3deg)`}
       ],{duration:2000,iterations:Infinity,easing:'ease-in-out'});
     }
   },1800);
   setTimeout(()=>plane.remove(),15000);
-  addFlightLogEntry(event);
 }
 
-function handleCloseAnimation(plane,banner,event,midX){
+function _launchSquadron(event){
+  const layer=document.getElementById('flight-layer');
+  const color=SOURCE_COLORS.replay;
+  const startY=innerHeight*0.3;
+  const banner=document.createElement('div');
+  banner.className='trade-plane__banner';
+  banner.style.position='fixed';banner.style.left='50%';banner.style.top=(startY-30)+'px';
+  banner.style.transform='translateX(-50%)';banner.style.borderColor=color;
+  banner.textContent=`📡 Replay squadron: ${event.wins}W/${event.losses}L from ${event.count} stocks`;
+  layer.appendChild(banner);
+  for(let i=0;i<3;i++){
+    const plane=document.createElement('div');
+    plane.className='trade-plane';plane.textContent='✈️';plane.style.fontSize='26px';
+    plane.style.left='-60px';plane.style.top=(startY+i*24)+'px';
+    layer.appendChild(plane);
+    plane.animate([
+      {transform:'translateX(0)'},
+      {transform:`translateX(${innerWidth+120}px)`}
+    ],{duration:3200,easing:'linear',fill:'forwards',delay:i*120});
+    setTimeout(()=>plane.remove(),3600+i*120);
+  }
+  setTimeout(()=>banner.remove(),3600);
+}
+
+function handleCloseAnimation(plane,banner,event,dx,dy){
   const won=event.outcome==='WIN';
-  banner.textContent=`${event.symbol} ${won?'🎉 +':'🪂 '}${Math.abs(event.pnl_pct||0).toFixed(1)}%`;
+  const srcLabel={real:'REAL',forced:'FORCED',intraday:'SIM',short:'SHORT'}[event.source]||'FORCED';
+  banner.textContent=`${srcLabel} ${event.symbol} ${won?'🎉 +':'🪂 '}${Math.abs(event.pnl_pct||0).toFixed(1)}%`;
   banner.classList.add(won?'win':'loss');
+  const planeRect=plane.getBoundingClientRect();
   if(won){
     plane.animate([
-      {transform:`translateX(${midX}px) translateY(-20px) rotate(0deg)`},
-      {transform:`translateX(${midX+40}px) translateY(-120px) rotate(180deg)`},
-      {transform:`translateX(${midX+80}px) translateY(-20px) rotate(360deg)`},
-      {transform:`translateX(${innerWidth+100}px) translateY(-40px) rotate(370deg)`}
+      {transform:`translate(${dx}px,${dy}px) rotate(0deg)`},
+      {transform:`translate(${dx+40}px,${dy-100}px) rotate(180deg)`},
+      {transform:`translate(${dx+80}px,${dy}px) rotate(360deg)`},
+      {transform:`translate(${innerWidth+150}px,${dy-20}px) rotate(370deg)`}
     ],{duration:2200,easing:'ease-in-out',fill:'forwards'});
-    spawnConfetti(midX+innerWidth*0.02,160);
+    spawnConfetti(planeRect.left+dx*0+60,planeRect.top+dy*0+20);
   }else{
     plane.animate([
-      {transform:`translateX(${midX}px) translateY(-20px) rotate(0deg)`},
-      {transform:`translateX(${midX-10}px) translateY(10px) rotate(-15deg)`},
-      {transform:`translateX(${midX+10}px) translateY(40px) rotate(10deg)`},
-      {transform:`translateX(${midX}px) translateY(80px) rotate(0deg)`}
+      {transform:`translate(${dx}px,${dy}px) rotate(0deg)`},
+      {transform:`translate(${dx-10}px,${dy+10}px) rotate(-15deg)`},
+      {transform:`translate(${dx+10}px,${dy+40}px) rotate(10deg)`},
+      {transform:`translate(${dx}px,${dy+80}px) rotate(0deg)`}
     ],{duration:1600,easing:'ease-in',fill:'forwards'});
     setTimeout(()=>{
       const chute=document.createElement('div');
       chute.className='parachute';chute.textContent='🪂';
-      chute.style.left=(midX-10)+'px';chute.style.top='60px';
+      const r=plane.getBoundingClientRect();
+      chute.style.left=(r.left)+'px';chute.style.top=(r.top-10)+'px';
       document.getElementById('flight-layer').appendChild(chute);
       setTimeout(()=>chute.remove(),3000);
     },1200);
@@ -425,10 +531,16 @@ function spawnConfetti(x,y){
 
 const _flightLog=[];
 function addFlightLogEntry(event){
-  const won=event.outcome==='WIN',cls=event.type==='TRADE_CLOSED'?(won?'win':'loss'):'';
-  const label=event.type==='TRADE_CLOSED'
-    ? `${event.symbol} closed ${won?'WIN':'LOSS'} ${(event.pnl_pct||0).toFixed(1)}%`
-    : `${event.symbol} opened @ ₹${(event.entry||0).toFixed(0)}`;
+  let label,cls='';
+  if(event.type==='SQUADRON'){
+    label=`📡 Replay squadron: ${event.wins}W/${event.losses}L from ${event.count} stocks`;
+  }else{
+    const won=event.outcome==='WIN';
+    cls=event.type==='TRADE_CLOSED'?(won?'win':'loss'):'';
+    label=event.type==='TRADE_CLOSED'
+      ? `${event.symbol} closed ${won?'WIN':'LOSS'} ${(event.pnl_pct||0).toFixed(1)}%`
+      : `${event.symbol} opened @ ₹${(event.entry||0).toFixed(0)}`;
+  }
   _flightLog.unshift({label,cls});
   _flightLog.splice(5);
   const el=document.getElementById('flight-log-list');
@@ -478,12 +590,23 @@ function countUp(el,target,duration=1200,prefix='',suffix='',dec=0){
   requestAnimationFrame(frame);
 }
 
+const SOURCE_COLORS={real:'#ffd93d',forced:'#4dd8ff',intraday:'#3ddc97',short:'#ff6ec7',replay:'#c9c9d9'};
 let pnlChart=null;
 function updatePnlChart(history){
-  const canvas=document.getElementById('pnl-chart');if(!canvas)return;
-  const ctx=canvas.getContext('2d');
+  const wrap=document.getElementById('pnl-chart-wrap');
+  const canvas=document.getElementById('pnl-chart');if(!canvas||!wrap)return;
+  if(!history.length){
+    wrap.innerHTML='<div class="empty-state" style="text-align:center;padding:30px;'+
+      'font-family:var(--font-display);font-weight:700;color:var(--text-muted)">'+
+      '🛫 No flights logged yet — check back after the first scheduled trade cycle.</div>';
+    pnlChart=null;return;
+  }
+  if(!document.getElementById('pnl-chart')){
+    wrap.innerHTML='<canvas id="pnl-chart" height="180"></canvas>';
+  }
+  const c2=document.getElementById('pnl-chart'),ctx=c2.getContext('2d');
   const labels=history.map(d=>d.symbol||'?'),data=history.map(d=>d.pnl||0);
-  const colors=data.map(v=>v>=0?'#3ddc97':'#ff5c7a');
+  const colors=history.map(d=>SOURCE_COLORS[d.source]||'#c9b8e0');
   if(pnlChart){pnlChart.data.labels=labels;pnlChart.data.datasets[0].data=data;
     pnlChart.data.datasets[0].backgroundColor=colors;pnlChart.update('active');return;}
   Chart.defaults.color='#c9b8e0';Chart.defaults.font.family="'Space Grotesk', sans-serif";
@@ -542,13 +665,38 @@ function updateKnowledge(entries){
   entries.slice(0,8).forEach(e=>{
     const desc=e.description||'';
     el.innerHTML+=`
-      <div class="knowledge-entry">
+      <div class="knowledge-entry" data-pattern-id="${e.id||''}" style="cursor:pointer">
         <div class="knowledge-entry__conf">${Math.round(e.confidence*100)}%</div>
-        <div class="knowledge-entry__desc">${desc}</div>
+        <div class="knowledge-entry__desc">${e.icon||'🧠'} ${desc}</div>
         <div class="knowledge-entry__count">${e.count}×</div>
       </div>`;
   });
 }
+
+document.getElementById('knowledge-list').addEventListener('click',async(e)=>{
+  const row=e.target.closest('.knowledge-entry');
+  if(!row||!row.dataset.patternId)return;
+  try{
+    const res=await fetch(`/api/knowledge/${TOKEN}/${row.dataset.patternId}`);
+    if(!res.ok)return;
+    const d=await res.json();
+    const won=(d.description||'').includes('WON');
+    document.getElementById('lm-icon').textContent=won?'🏆':'📖';
+    document.getElementById('lm-desc').textContent=d.description;
+    document.getElementById('lm-meta').innerHTML=
+      `Category: ${d.category}<br>`+
+      `Confidence: ${Math.round(d.confidence*100)}%<br>`+
+      `Observed: ${d.observed_count}× in ${d.regime}<br>`+
+      `<em>${won?'This is a confirmed win pattern the system now trusts more.':
+          'This is a lesson the system now avoids repeating.'}</em>`;
+    document.getElementById('lesson-modal').classList.remove('hidden');
+  }catch(_){}
+});
+document.querySelector('.lesson-modal__close').addEventListener('click',()=>
+  document.getElementById('lesson-modal').classList.add('hidden'));
+document.getElementById('lesson-modal').addEventListener('click',(e)=>{
+  if(e.target.id==='lesson-modal')e.target.classList.add('hidden');
+});
 
 function updateThresholds(adaptive,currentRegime){
   const el=document.getElementById('thresholds-grid');
@@ -622,6 +770,28 @@ function updateDashboard(d){
   document.getElementById('sb-updated').textContent=(d.timestamp||'').slice(11,19)+' IST';
 
   document.getElementById('killswitch-banner').style.display=d.kill_switch?'block':'none';
+}
+
+// ── Click-anywhere sparkle burst ──
+document.addEventListener('click',(e)=>{
+  if(e.target.closest('button, a, .knowledge-entry, .lesson-modal, #enable-tilt'))return;
+  spawnClickBurst(e.clientX,e.clientY);
+});
+function spawnClickBurst(x,y){
+  const colors=['#ffd93d','#4dd8ff','#3ddc97','#ff6ec7'];
+  const emojis=['✨','⭐','🌟','💫'];
+  for(let i=0;i<8;i++){
+    const bit=document.createElement('div');
+    bit.textContent=emojis[Math.floor(Math.random()*emojis.length)];
+    bit.style.cssText=`position:fixed;left:${x}px;top:${y}px;font-size:16px;pointer-events:none;z-index:600;`;
+    document.body.appendChild(bit);
+    const angle=(i/8)*Math.PI*2+Math.random()*0.5,dist=40+Math.random()*40;
+    bit.animate([
+      {transform:'translate(0,0) scale(1)',opacity:1},
+      {transform:`translate(${Math.cos(angle)*dist}px,${Math.sin(angle)*dist}px) scale(0.3)`,opacity:0}
+    ],{duration:600,easing:'ease-out',fill:'forwards'});
+    setTimeout(()=>bit.remove(),600);
+  }
 }
 
 let ws=null;

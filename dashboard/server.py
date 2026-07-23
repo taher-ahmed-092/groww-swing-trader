@@ -133,6 +133,44 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+def _load_all_trade_history(journal: TradingJournal) -> list[dict]:
+    """Merges real + forced + intraday + short trades, each tagged with its
+    source, so the P&L chart isn't empty just because there are 0 real trades."""
+    import json as _json
+
+    merged: list[dict] = []
+    try:
+        for t in journal.get_recent(n=50):
+            if t.outcome in ("WIN", "LOSS") and t.closed_at:
+                merged.append({
+                    "symbol": t.symbol, "pnl": t.pnl_pct or 0, "outcome": t.outcome,
+                    "source": "real", "closed_at": t.closed_at.isoformat(),
+                })
+    except Exception:
+        pass
+
+    for fname, source in (
+        ("data/cache/forced_trades_history.json", "forced"),
+        ("data/cache/intraday_sim_history.json", "intraday"),
+        ("data/cache/short_trades_history.json", "short"),
+    ):
+        p = Path(fname)
+        if p.exists():
+            try:
+                for t in _json.loads(p.read_text()):
+                    if t.get("outcome") in ("WIN", "LOSS"):
+                        merged.append({
+                            "symbol": t.get("symbol", "?"), "pnl": t.get("pnl_pct", 0) or 0,
+                            "outcome": t.get("outcome"), "source": source,
+                            "closed_at": t.get("closed_at", t.get("opened_at", "")),
+                        })
+            except Exception:
+                pass
+
+    merged.sort(key=lambda x: x.get("closed_at", "") or "")
+    return merged[-60:]  # last 60 across all sources
+
+
 def collect_dashboard_data() -> dict:
     """Collect all dashboard data from the local DB. Never raises."""
     try:
@@ -157,11 +195,7 @@ def collect_dashboard_data() -> dict:
                 "days_held": (datetime.now() - t.executed_at).days if t.executed_at else 0,
             })
 
-        pnl_history = [
-            {"date": t.closed_at.strftime("%d/%m") if t.closed_at else "",
-             "pnl": t.pnl_pct or 0, "symbol": t.symbol, "outcome": t.outcome}
-            for t in reversed(recent) if t.outcome in ("WIN", "LOSS") and t.closed_at
-        ]
+        pnl_history = _load_all_trade_history(journal)
         wl_chart = [{"outcome": t.outcome, "symbol": t.symbol}
                     for t in recent if t.outcome in ("WIN", "LOSS")]
 
@@ -220,9 +254,12 @@ def collect_dashboard_data() -> dict:
             learning_metrics = {"forced_total": 0, "forced_wins": 0, "forced_wr": 0,
                                 "kb_patterns": 0, "replay_patterns": 0, "xgboost_progress": 0}
 
+        _KB_ICONS = {"HISTORICAL_REPLAY": "📡", "FORCED_LEARNING": "⚡",
+                     "INTRADAY_SIMULATION": "🔬", "SHORT_SIMULATION": "⏱️"}
         kb = [{"description": e.pattern_description[:60], "confidence": round(e.confidence, 2),
                "category": e.category, "is_hypothesis": e.is_hypothesis,
-               "count": e.observed_count} for e in knowledge[:7]]
+               "count": e.observed_count, "id": e.pattern_id,
+               "icon": _KB_ICONS.get(e.category, "🧠")} for e in knowledge[:8]]
 
         try:
             from src.memory.adaptive_thresholds import AdaptiveThresholds
@@ -286,20 +323,32 @@ async def broadcast_trade_event(event_type: str, trade: dict) -> None:
     a full dashboard snapshot (updateDashboard() assumes every message carries
     the full payload — an event-only message would crash it on missing keys).
 
-    event_type: "TRADE_OPENED" | "TRADE_CLOSED"
+    event_type: "TRADE_OPENED" | "TRADE_CLOSED" | "SQUADRON"
+    trade["source"]: "real" | "forced" | "intraday" | "short" | "replay"
     """
     data = collect_dashboard_data()
-    data["event"] = {
-        "type": event_type,
-        "symbol": trade.get("symbol", ""),
-        "entry": trade.get("entry", 0),
-        "stop": trade.get("stop", 0),
-        "target": trade.get("target", 0),
-        "outcome": trade.get("outcome", ""),
-        "pnl_pct": trade.get("pnl_pct", 0),
-        "trade_type": trade.get("trade_type", ""),
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+    if event_type == "SQUADRON":
+        data["event"] = {
+            "type": "SQUADRON",
+            "source": trade.get("source", "replay"),
+            "count": trade.get("count", 0),
+            "wins": trade.get("wins", 0),
+            "losses": trade.get("losses", 0),
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    else:
+        data["event"] = {
+            "type": event_type,
+            "source": trade.get("source", "forced"),
+            "symbol": trade.get("symbol", ""),
+            "entry": trade.get("entry", 0),
+            "stop": trade.get("stop", 0),
+            "target": trade.get("target", 0),
+            "outcome": trade.get("outcome", ""),
+            "pnl_pct": trade.get("pnl_pct", 0),
+            "trade_type": trade.get("trade_type", ""),
+            "timestamp": datetime.now(IST).isoformat(),
+        }
     await manager.broadcast(data)
 
 
@@ -340,6 +389,26 @@ async def receive_event(request: Request):
     data["event"] = event
     await manager.broadcast(data)
     return {"ok": True}
+
+
+@app.get("/api/knowledge/{token}/{pattern_id}")
+async def knowledge_detail(token: str, pattern_id: str):
+    if not verify_token(token):
+        raise HTTPException(status_code=401, detail="Invalid token.")
+    journal = TradingJournal()
+    kb = journal.get_active_knowledge(min_confidence=0.0)
+    entry = next((e for e in kb if e.pattern_id == pattern_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Pattern not found.")
+    return {
+        "pattern_id": entry.pattern_id,
+        "description": entry.pattern_description,
+        "category": entry.category,
+        "confidence": entry.confidence,
+        "observed_count": entry.observed_count,
+        "regime": entry.observed_in_regime,
+        "is_hypothesis": entry.is_hypothesis,
+    }
 
 
 @app.get("/health")

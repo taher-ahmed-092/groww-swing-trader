@@ -424,6 +424,8 @@ def intraday_entry_job() -> None:
     from src.learning.intraday_simulator import IntradaySimulator
 
     sims = IntradaySimulator().run_morning_entries()
+    for s in sims:
+        _broadcast_trade_event_safe("TRADE_OPENED", {**s, "source": "intraday"})
     if sims:
         names = ", ".join(s["symbol"] for s in sims)
         TelegramNotifier().send_message(
@@ -442,6 +444,8 @@ def intraday_exit_job() -> None:
 
     sim = IntradaySimulator()
     result = sim.run_afternoon_exits()
+    for t in result.get("results", []):
+        _broadcast_trade_event_safe("TRADE_CLOSED", {**t, "source": "intraday"})
     n = result["closed"]
     if n > 0:
         wins, losses = result["wins"], result["losses"]
@@ -525,6 +529,9 @@ def off_hours_replay_job() -> None:
         f"[cyan][JOB] replay: {result['replayed']} stocks, {result['signals_found']} signals, "
         f"{result['wins']}W/{result['losses']}L, {result['patterns_added']} new patterns[/cyan]")
 
+    if result.get("replayed"):
+        _broadcast_squadron_safe(result["replayed"], result["wins"], result["losses"])
+
     # Telegram digest only at 8 AM / 2 PM / 8 PM and only when meaningful.
     if result["patterns_added"] >= 3 and now_ist.hour in (8, 14, 20):
         stats = engine.get_stats()
@@ -596,6 +603,20 @@ def _broadcast_trade_event_safe(event_type: str, trade: dict) -> None:
         pass
 
 
+def _broadcast_squadron_safe(count: int, wins: int, losses: int) -> None:
+    """One combined 'squadron' event per replay batch — never one event per
+    stock, which would spam 15-50 plane launches at once."""
+    try:
+        import asyncio
+
+        from dashboard.server import broadcast_trade_event
+
+        asyncio.run(broadcast_trade_event("SQUADRON", {
+            "source": "replay", "count": count, "wins": wins, "losses": losses}))
+    except Exception:
+        pass
+
+
 def forced_trade_job() -> None:
     """Every 15 minutes, all day, 24/7 — place forced learning trades. No hour
     restriction: market hours score+place live candidates, off-hours run
@@ -608,7 +629,9 @@ def forced_trade_job() -> None:
     for t in trades:
         console.print(f"[cyan][FORCED] {t['symbol']} entry=₹{t['entry']:.2f} "
                       f"stop=₹{t['stop']:.2f} score={t['signal_score']:.2f}[/cyan]")
-        _broadcast_trade_event_safe("TRADE_OPENED", t)
+        t.setdefault("source", "forced")
+        _broadcast_trade_event_safe(
+            "TRADE_CLOSED" if t.get("outcome") not in (None, "OPEN") else "TRADE_OPENED", t)
     if trades and _should_notify_forced():
         lines = [f"⚡ *{len(trades)} learning trades*"]
         for t in trades:
@@ -630,6 +653,7 @@ def forced_close_job() -> None:
         console.print(f"[cyan][FORCED CLOSE] {len(closed)} trades: "
                       f"{wins}W/{len(closed) - wins}L[/cyan]")
         for t in closed:
+            t.setdefault("source", "forced")
             _broadcast_trade_event_safe("TRADE_CLOSED", t)
 
 
