@@ -60,6 +60,14 @@ class TradeRecord(SQLModel, table=True):
     is_seeded: bool = Field(default=False)
     # Which strategy produced this trade (momentum/mean_reversion/breakout/pairs_trading).
     strategy_name: str = Field(default="momentum")
+    # Cost-model fields (src/trading/cost_model.py) — pnl/pnl_pct above are NET of
+    # transaction costs; these preserve the gross figures for comparison.
+    gross_pnl: Optional[float] = None
+    gross_pnl_pct: Optional[float] = None
+    # Realistic paper fill: signal_price is what the technical agent proposed,
+    # fill_price includes tier-based slippage (src/trading/cost_model.py).
+    signal_price: Optional[float] = None
+    fill_price: Optional[float] = None
 
 
 class DailyJournalEntry(SQLModel, table=True):
@@ -152,6 +160,28 @@ class TradingJournal:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         SQLModel.metadata.create_all(self.engine)
+        self._migrate_new_columns()
+
+    def _migrate_new_columns(self) -> None:
+        """create_all() only creates missing TABLES, never adds columns to an
+        existing one — an on-disk trades.db from before the cost-model fields
+        were added would otherwise 500 on every query. Additive-only, nullable
+        columns, so existing rows/history are never touched."""
+        new_columns = {
+            "gross_pnl": "FLOAT", "gross_pnl_pct": "FLOAT",
+            "signal_price": "FLOAT", "fill_price": "FLOAT",
+        }
+        try:
+            with self.engine.connect() as conn:
+                existing = {row[1] for row in conn.exec_driver_sql(
+                    "PRAGMA table_info(traderecord)").fetchall()}
+                for col, coltype in new_columns.items():
+                    if col not in existing:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE traderecord ADD COLUMN {col} {coltype}")
+                conn.commit()
+        except Exception:
+            pass
 
     # ── writes ───────────────────────────────────────────────────────────────
     def log_proposed(self, state: TradeState) -> TradeRecord:
@@ -204,6 +234,21 @@ class TradingJournal:
             session.refresh(record)
         return record
 
+    def log_fill_prices(self, trade_id: int, signal_price: float,
+                       fill_price: Optional[float]) -> TradeRecord:
+        """Records the pre-slippage signal price alongside the actual paper fill
+        price, so cost/expectancy analysis can see the slippage that was applied."""
+        with Session(self.engine) as session:
+            record = session.get(TradeRecord, trade_id)
+            if record is None:
+                raise ValueError(f"No TradeRecord with id={trade_id}")
+            record.signal_price = signal_price
+            record.fill_price = fill_price
+            session.add(record)
+            session.commit()
+            session.refresh(record)
+        return record
+
     def log_closed(self, trade_id: int, close_price: float) -> TradeRecord:
         with Session(self.engine) as session:
             record = session.get(TradeRecord, trade_id)
@@ -211,8 +256,22 @@ class TradingJournal:
                 raise ValueError(f"No TradeRecord with id={trade_id}")
             entry = record.entry_price or 0.0
             qty_value = close_price - entry
+            gross_pnl_pct = round((qty_value / entry) * 100, 4) if entry else None
+            record.gross_pnl = round(qty_value, 4)
+            record.gross_pnl_pct = gross_pnl_pct
             record.pnl = round(qty_value, 4)
-            record.pnl_pct = round((qty_value / entry) * 100, 4) if entry else None
+            record.pnl_pct = gross_pnl_pct
+            if entry and gross_pnl_pct is not None:
+                try:
+                    from src.data.watchlist import ALL_STOCKS
+                    from src.trading.cost_model import net_pnl_pct
+
+                    tier = ALL_STOCKS.get(record.symbol, {}).get("tier", "large")
+                    record.pnl_pct = net_pnl_pct(gross_pnl_pct, entry, close_price, tier,
+                                                 is_intraday=False)
+                    record.pnl = round(entry * record.pnl_pct / 100, 4)
+                except Exception:
+                    pass
             record.outcome = "WIN" if qty_value > 0 else "LOSS"
             record.closed_at = _now()
             session.add(record)

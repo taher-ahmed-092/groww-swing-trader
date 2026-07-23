@@ -59,21 +59,22 @@ class ScoutAgent:
         os.makedirs(_CACHE_DIR, exist_ok=True)
 
     # ── helpers ──────────────────────────────────────────────────────────────
-    def _nifty_returns(self) -> tuple[float | None, float | None]:
-        """Return (nifty_1m_pct, nifty_20d_pct)."""
+    def _nifty_returns(self) -> tuple[float | None, float | None, float | None]:
+        """Return (nifty_1m_pct, nifty_20d_pct, nifty_30d_pct)."""
         try:
             df = yf.Ticker("^NSEI").history(period="3mo")
-            if df is None or len(df) < 21:
-                return None, None
+            if df is None or len(df) < 31:
+                return None, None, None
             close = df["Close"]
             last = float(close.iloc[-1])
             # ~1 month ≈ 22 sessions; 20-day ≈ 21 sessions back.
             ref_1m = float(close.iloc[-22]) if len(close) >= 22 else float(close.iloc[0])
             r1m = (last / ref_1m - 1) * 100
             r20 = (last / float(close.iloc[-21]) - 1) * 100
-            return r1m, r20
+            r30 = (last / float(close.iloc[-31]) - 1) * 100
+            return r1m, r20, r30
         except Exception:
-            return None, None
+            return None, None, None
 
     def _get_fii_dii_data(self) -> dict:
         neutral = {
@@ -170,7 +171,7 @@ class ScoutAgent:
 
     def _score_symbol(
         self, symbol: str, nifty_1m: float | None, nifty_20d: float | None,
-        fii_dii: dict, params: dict,
+        fii_dii: dict, params: dict, nifty_30d: float | None = None,
     ) -> dict | None:
         df = self.fetcher.get_price_history(symbol, period="1y")
         if df is None or df.empty:
@@ -281,6 +282,19 @@ class ScoutAgent:
                 score += 1
                 reasons.append(f"20d RS strong ({stock_20d:.1f}% vs Nifty {nifty_20d:.1f}%)")
 
+        # 8. Relative strength vs Nifty over 30 days — leaders in a weak market
+        # become the biggest winners when the market turns (professional-grade
+        # sectorial relative-strength signal).
+        if len(df) >= 31 and nifty_30d is not None:
+            stock_30d = (price / float(df["Close"].iloc[-31]) - 1) * 100
+            rs_score = stock_30d - nifty_30d
+            if rs_score > 3:
+                score += 1.5
+                reasons.append(f"Outperforming Nifty by {rs_score:.1f}%")
+            elif rs_score < -5:
+                score -= 1
+                reasons.append("Lagging the index")
+
         # Small-caps need a strong signal (breakout OR deep-oversold bounce) to rank —
         # their volatility punishes marginal setups.
         if tier == "small":
@@ -306,7 +320,7 @@ class ScoutAgent:
         except Exception:
             failure_patterns = []
 
-        nifty_1m, nifty_20d = self._nifty_returns()
+        nifty_1m, nifty_20d, nifty_30d = self._nifty_returns()
         fii_dii = self._get_fii_dii_data()
         params = get_adaptive_params()
 
@@ -314,7 +328,7 @@ class ScoutAgent:
 
         scored: list[dict] = []
         for symbol in symbols:
-            candidate = self._score_symbol(symbol, nifty_1m, nifty_20d, fii_dii, params)
+            candidate = self._score_symbol(symbol, nifty_1m, nifty_20d, fii_dii, params, nifty_30d)
             if candidate is not None:
                 scored.append(candidate)
 

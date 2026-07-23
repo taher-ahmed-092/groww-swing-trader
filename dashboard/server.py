@@ -135,40 +135,12 @@ manager = ConnectionManager()
 
 def _load_all_trade_history(journal: TradingJournal) -> list[dict]:
     """Merges real + forced + intraday + short trades, each tagged with its
-    source, so the P&L chart isn't empty just because there are 0 real trades."""
-    import json as _json
+    source, so the P&L chart isn't empty just because there are 0 real trades.
+    Thin wrapper over the shared loader so PerformanceAnalyzer's professional
+    metrics never drift out of sync with what the dashboard counts as "all"."""
+    from src.analytics.trade_loader import load_all_trade_history
 
-    merged: list[dict] = []
-    try:
-        for t in journal.get_recent(n=50):
-            if t.outcome in ("WIN", "LOSS") and t.closed_at:
-                merged.append({
-                    "symbol": t.symbol, "pnl": t.pnl_pct or 0, "outcome": t.outcome,
-                    "source": "real", "closed_at": t.closed_at.isoformat(),
-                })
-    except Exception:
-        pass
-
-    for fname, source in (
-        ("data/cache/forced_trades_history.json", "forced"),
-        ("data/cache/intraday_sim_history.json", "intraday"),
-        ("data/cache/short_trades_history.json", "short"),
-    ):
-        p = Path(fname)
-        if p.exists():
-            try:
-                for t in _json.loads(p.read_text()):
-                    if t.get("outcome") in ("WIN", "LOSS"):
-                        merged.append({
-                            "symbol": t.get("symbol", "?"), "pnl": t.get("pnl_pct", 0) or 0,
-                            "outcome": t.get("outcome"), "source": source,
-                            "closed_at": t.get("closed_at", t.get("opened_at", "")),
-                        })
-            except Exception:
-                pass
-
-    merged.sort(key=lambda x: x.get("closed_at", "") or "")
-    return merged
+    return load_all_trade_history(journal)
 
 
 def _combined_totals(all_trades: list[dict]) -> dict:
@@ -194,15 +166,22 @@ def _combined_totals(all_trades: list[dict]) -> dict:
     avg_win = sum(t.get("pnl", 0) for t in wins) / len(wins) if wins else 0
     avg_loss = sum(t.get("pnl", 0) for t in losses) / len(losses) if losses else 0
     wr_frac = total_won / total_taken if total_taken else 0
-    expectancy = round(wr_frac * avg_win + (1 - wr_frac) * avg_loss, 3)
+    net_expectancy = round(wr_frac * avg_win + (1 - wr_frac) * avg_loss, 3)
     breakeven_wr = (round(abs(avg_loss) / (avg_win + abs(avg_loss)) * 100, 1)
                     if (avg_win + abs(avg_loss)) > 0 else 50.0)
+
+    gross_avg_win = (sum(t.get("gross_pnl", t.get("pnl", 0)) for t in wins) / len(wins)
+                     if wins else 0)
+    gross_avg_loss = (sum(t.get("gross_pnl", t.get("pnl", 0)) for t in losses) / len(losses)
+                      if losses else 0)
+    gross_expectancy = round(wr_frac * gross_avg_win + (1 - wr_frac) * gross_avg_loss, 3)
 
     return {
         "total": total_taken, "won": total_won, "lost": total_lost,
         "win_rate": overall_wr, "by_source": by_source,
         "avg_win_pct": round(avg_win, 2), "avg_loss_pct": round(avg_loss, 2),
-        "expectancy_pct": expectancy, "breakeven_wr": breakeven_wr,
+        "expectancy_pct": net_expectancy, "breakeven_wr": breakeven_wr,
+        "gross_expectancy_pct": gross_expectancy, "net_expectancy_pct": net_expectancy,
     }
 
 
@@ -312,6 +291,11 @@ def collect_dashboard_data() -> dict:
         except Exception:
             funny_line = ""
 
+        try:
+            pro_metrics = pa.get_professional_metrics()
+        except Exception:
+            pro_metrics = {"status": "no_data"}
+
         now_ist = datetime.now(IST)
         data = {
             "timestamp": now_ist.isoformat(),
@@ -348,6 +332,7 @@ def collect_dashboard_data() -> dict:
             "learning_metrics": learning_metrics,
             "adaptive_thresholds": adaptive_data,
             "combined_totals": combined_totals,
+            "professional_metrics": pro_metrics,
             "funny_line": funny_line,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }

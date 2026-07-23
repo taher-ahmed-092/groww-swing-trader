@@ -187,6 +187,47 @@ class PerformanceAnalyzer:
             f"{streak_line}"
         )
 
+    def get_professional_metrics(self) -> dict:
+        """The metrics professional platforms lead with — profit factor, max
+        drawdown, and strategy-decay detection. Computed across ALL trade
+        sources (real + simulated), not just the real pipeline."""
+        from src.analytics.trade_loader import load_all_trade_history
+
+        trades = load_all_trade_history(self.journal)
+        if not trades:
+            return {"status": "no_data"}
+
+        pnls = [t.get("pnl", 0) for t in trades]
+        gross_wins = sum(p for p in pnls if p > 0)
+        gross_losses = abs(sum(p for p in pnls if p < 0))
+        # Cap rather than return float('inf') — "Infinity" isn't valid JSON and
+        # would silently break JSON.parse() on the dashboard's WebSocket payload.
+        profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else 999.99
+
+        # Max drawdown on cumulative equity curve.
+        equity = peak = max_dd = 0.0
+        for p in pnls:
+            equity += p
+            peak = max(peak, equity)
+            max_dd = max(max_dd, peak - equity)
+
+        # Strategy decay: rolling 20-trade WR, latest vs previous.
+        recent20 = pnls[-20:]
+        prev20 = pnls[-40:-20]
+        recent_wr = sum(1 for p in recent20 if p > 0) / len(recent20) if recent20 else 0
+        prev_wr = sum(1 for p in prev20 if p > 0) / len(prev20) if prev20 else 0
+        decay_alert = len(prev20) == 20 and recent_wr < prev_wr - 0.15
+
+        return {
+            "profit_factor": profit_factor,
+            "max_drawdown_pct": round(max_dd, 2),
+            "rolling_wr_recent20": round(recent_wr * 100, 1),
+            "rolling_wr_prev20": round(prev_wr * 100, 1),
+            "decay_alert": decay_alert,
+            "trend": ("IMPROVING" if recent_wr > prev_wr + 0.05
+                      else "DECAYING" if decay_alert else "STABLE"),
+        }
+
     def should_pause_trading(self) -> tuple[bool, str]:
         s = self.get_summary()
         if s["consecutive_losses"] >= 3:

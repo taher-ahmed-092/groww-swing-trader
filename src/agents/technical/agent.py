@@ -51,7 +51,20 @@ class TechnicalAgent:
         target_price = round(entry_price + (entry_price - stop_price) * LIMITS.target_reward_ratio, 4)
         return stop_price, target_price
 
+    _weekly_trend_cache: dict[tuple[str, str], str] = {}
+
     def _weekly_trend(self, symbol: str) -> str:
+        from datetime import date
+
+        cache_key = (symbol, date.today().isoformat())
+        cached = self._weekly_trend_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        trend = self._weekly_trend_uncached(symbol)
+        self._weekly_trend_cache[cache_key] = trend
+        return trend
+
+    def _weekly_trend_uncached(self, symbol: str) -> str:
         wdf = self.fetcher.get_price_history(symbol, period="1y", interval="1wk")
         if wdf is None or wdf.empty:
             return "SIDEWAYS"
@@ -131,12 +144,27 @@ class TechnicalAgent:
 
         recall = PatternMatcher().recall(symbol, indicators, regime)
 
+        # Multi-timeframe confirmation: a daily uptrend that the weekly chart
+        # disagrees with is a counter-trend bounce, not a trend continuation.
+        daily_trend = indicators.get("trend", "SIDEWAYS")
+        mtf_adjustment = 0.0
+        mtf_note = None
+        if daily_trend == "UPTREND" and weekly_trend == "UPTREND":
+            mtf_adjustment = 0.1
+            mtf_note = "MTF aligned"
+        elif daily_trend == "UPTREND" and weekly_trend == "DOWNTREND":
+            mtf_adjustment = -0.15
+            mtf_note = "MTF_CONFLICT"
+            flags.append("MTF_CONFLICT")
+
         def _apply_recall(verdict: dict) -> dict:
             verdict["memory_recall"] = recall
             verdict["reasoning"] = (verdict.get("reasoning", "") + f" | {recall['summary']}")
             # recall['adjustment'] is on a 0-10 scale; this verdict's score is 0-1.
-            verdict["score"] = round(
-                max(0.0, min(1.0, (verdict.get("score", 0) or 0) + recall["adjustment"] / 10)), 4)
+            score = (verdict.get("score", 0) or 0) + recall["adjustment"] / 10 + mtf_adjustment
+            verdict["score"] = round(max(0.0, min(1.0, score)), 4)
+            if mtf_note:
+                verdict["reasoning"] = verdict["reasoning"] + f" | {mtf_note}"
             return verdict
 
         def _enforce_weekly(verdict: dict) -> dict:

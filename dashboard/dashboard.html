@@ -314,6 +314,11 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
       <div class="stat-tile"><div class="stat-tile__num" id="sim-total">0</div><div class="stat-tile__label">Simulations</div></div>
       <div class="stat-tile"><div class="stat-tile__num" id="replay-covered">0</div><div class="stat-tile__label">Replay Patterns</div></div>
     </div>
+    <div class="engine-grid" style="margin-top:12px">
+      <div class="stat-tile"><div class="stat-tile__num" id="pf-num">—</div><div class="stat-tile__label">Profit Factor</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="dd-num">—</div><div class="stat-tile__label">Max Drawdown %</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="trend-badge" style="font-size:16px">—</div><div class="stat-tile__label">Strategy Trend</div></div>
+    </div>
     <div class="xgb-label" style="display:flex;justify-content:space-between;font-family:var(--font-display);font-weight:700;font-size:13px">
       <span>XGBoost Signal Model</span><span id="xgb-label-text">0%</span>
     </div>
@@ -810,12 +815,13 @@ function updateDashboard(d){
     wrEl.style.color=wr>=55?'var(--green)':wr>=45?'var(--gold)':'var(--red)';
   }
   const evEl=document.getElementById('sb-ev');
-  const ev=ct.expectancy_pct||0;
+  const ev=ct.net_expectancy_pct!=null?ct.net_expectancy_pct:(ct.expectancy_pct||0);
   if(evEl){
     evEl.textContent=(ev>0?'+':'')+ev.toFixed(2)+'%';
     evEl.style.color=ev>0?'var(--green)':ev>-0.5?'var(--gold)':'var(--red)';
   }
   document.getElementById('sb-ev-tile')?.setAttribute('title',
+    `NET (honest): ${ev.toFixed(2)}% | GROSS (pre-cost): ${(ct.gross_expectancy_pct||0).toFixed(2)}% | `+
     `Avg win: ${ct.avg_win_pct}% | Avg loss: ${ct.avg_loss_pct}% | Break-even WR: ${ct.breakeven_wr}%`);
 
   countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
@@ -856,6 +862,21 @@ function updateDashboard(d){
 
   updateThresholds(adaptive,regime);
   updateLossDiagnosis(adaptive);
+
+  const pm=d.professional_metrics||{};
+  if(pm.status!=='no_data'){
+    const pfEl=document.getElementById('pf-num');
+    if(pfEl)pfEl.textContent=(pm.profit_factor>=999?'∞':(pm.profit_factor||0).toFixed(2));
+    const ddEl=document.getElementById('dd-num');
+    if(ddEl)ddEl.textContent=(pm.max_drawdown_pct||0).toFixed(1)+'%';
+    const trendEl=document.getElementById('trend-badge');
+    if(trendEl){
+      const trend=pm.trend||'STABLE';
+      const trendIcon={IMPROVING:'📈',STABLE:'➡️',DECAYING:'📉'}[trend]||'➡️';
+      trendEl.textContent=trendIcon+' '+trend;
+      trendEl.style.color=trend==='IMPROVING'?'var(--green)':trend==='DECAYING'?'var(--red)':'var(--text-muted)';
+    }
+  }
 
   const nextJob=(d.next_jobs&&d.next_jobs[0])?`${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'None today';
   document.getElementById('sb-mode').textContent=d.mode||'—';

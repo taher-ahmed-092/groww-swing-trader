@@ -82,6 +82,26 @@ class SignalCombiner:
             return {"trained": False, "n_samples": len(X)}
 
         X, y = np.array(X), np.array(y)
+
+        # Walk-forward validation: train on the first 70% chronologically, validate
+        # on the last 30%. A model that only looks good on data it trained on is
+        # the overfitting/decay trap — it fits historical noise and collapses live.
+        split = int(len(X) * 0.7)
+        X_train, X_val = X[:split], X[split:]
+        y_train, y_val = y[:split], y[split:]
+
+        val_model = xgb.XGBClassifier(n_estimators=50, max_depth=3,
+                                      learning_rate=0.1, eval_metric="logloss")
+        val_model.fit(X_train, y_train)
+        val_preds = val_model.predict(X_val)
+        val_accuracy = float((val_preds == y_val).mean()) if len(y_val) else 0.0
+
+        if val_accuracy * 100 <= 55:
+            return {"trained": False, "n_samples": len(X),
+                    "reason": f"validation accuracy {val_accuracy * 100:.0f}% below 55% — "
+                              "model would overfit; accumulating more data"}
+
+        # Validation passed — retrain on the full dataset for the deployed model.
         model = xgb.XGBClassifier(n_estimators=50, max_depth=3,
                                   learning_rate=0.1, eval_metric="logloss")
         model.fit(X, y)
@@ -91,6 +111,7 @@ class SignalCombiner:
         names = list(self.extract_features({}).keys())
         top = sorted(zip(names, model.feature_importances_), key=lambda x: -x[1])[:5]
         return {"trained": True, "n_samples": len(X),
+                "validation_accuracy": round(val_accuracy * 100, 1),
                 "top_features": [(f, round(float(i), 3)) for f, i in top]}
 
     def predict_win_probability(self, state: dict) -> float | None:

@@ -91,8 +91,24 @@ class ExecutorAgent:
             target_price=decision["target_price"],
         )
 
+        # Realistic paper fill: a real order never fills at the exact signal price.
+        # Record both so cost/expectancy analysis reflects reality, not a fiction
+        # where every simulated entry is frictionless.
+        signal_price = decision["price"]
+        if settings.broker_mode == "paper":
+            from src.data.watchlist import ALL_STOCKS
+            from src.trading.cost_model import SLIPPAGE_BY_TIER
+
+            tier = ALL_STOCKS.get(decision["symbol"], {}).get("tier", "large")
+            fill_price = round(signal_price * (1 + SLIPPAGE_BY_TIER.get(tier, 0.0005)), 4)
+            result["fill_price"] = fill_price
+
         # 4. Journal the execution.
         self.journal.log_executed(record.id, result)
+        try:
+            self.journal.log_fill_prices(record.id, signal_price, result.get("fill_price"))
+        except Exception:
+            pass
 
         # Live dashboard trade-plane animation (best-effort — the dashboard may
         # not be running as a separate process; never blocks execution).

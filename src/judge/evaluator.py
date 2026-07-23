@@ -32,7 +32,7 @@ _VALID_FLAGS = {
     "PROMOTER_PLEDGE_RISK", "EARNINGS_PROXIMITY", "FIGHTING_NIFTY",
     "HARD_REJECTED_FUNDAMENTAL", "TECHNICAL_SKIP",
     "SUPERTREND_BEARISH", "SELLING_PRESSURE", "BELOW_ALL_SUPPORTS",
-    "ML_JUDGE_DISAGREEMENT",
+    "ML_JUDGE_DISAGREEMENT", "COSTS_EAT_EDGE",
 }
 
 APPROVAL_THRESHOLD = 7.5  # out of 10
@@ -91,6 +91,26 @@ class LLMJudge:
 
         # ── Auto-veto (pre-LLM, runs even with no API key) ──
         veto = self._auto_veto(fundamental, technical, market_context, rr)
+
+        # Costs veto — a trade whose expected move can't clear 3x round-trip costs
+        # is a fiction of an edge once STT/brokerage/GST/slippage are applied.
+        if entry and target:
+            try:
+                from src.data.watchlist import ALL_STOCKS
+                from src.trading.cost_model import compute_round_trip_costs
+
+                symbol = state.get("symbol", "")
+                tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+                expected_move_pct = (target - entry) / entry * 100
+                est_cost_pct = compute_round_trip_costs(entry, target, 1, tier).total_pct
+                if expected_move_pct < est_cost_pct * 3:
+                    veto.append("COSTS_EAT_EDGE")
+                    console.print(
+                        f"[red][JUDGE] Expected move {expected_move_pct:.2f}% doesn't clear "
+                        f"3x costs {est_cost_pct * 3:.2f}%[/red]")
+            except Exception:
+                pass
+
         if veto:
             if manually_requested:
                 veto.append("MANUALLY_REQUESTED")

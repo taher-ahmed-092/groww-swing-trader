@@ -319,6 +319,19 @@ def daily_learning_job() -> None:
             "Thresholds adjusted from trading evidence:\n" + "\n".join(change_lines)
         )
 
+    from src.analytics.performance import PerformanceAnalyzer
+
+    metrics = PerformanceAnalyzer().get_professional_metrics()
+    if metrics.get("decay_alert"):
+        console.print(f"[yellow][JOB] strategy decay detected: {metrics}[/yellow]")
+        TelegramNotifier().send_message(
+            "⚠️ *STRATEGY DECAY DETECTED*\n"
+            f"Rolling 20-trade WR fell from {metrics['rolling_wr_prev20']}% to "
+            f"{metrics['rolling_wr_recent20']}%.\n"
+            "The adaptive thresholds will tighten automatically. "
+            "Consider reviewing LESSONS.md for what changed."
+        )
+
 
 def weekly_distillation_job() -> None:
     if _kill_switch():
@@ -419,7 +432,9 @@ def weekly_agent_evaluation_job() -> None:
 
 def intraday_entry_job() -> None:
     """Mon-Fri 9:30 AM — open 3-5 intraday learning simulations on real NSE data."""
-    if _kill_switch() or _is_paused():
+    from src.risk.checker import is_daily_loss_halted
+
+    if _kill_switch() or _is_paused() or is_daily_loss_halted():
         return
     from src.learning.intraday_simulator import IntradaySimulator
 

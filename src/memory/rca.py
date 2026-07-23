@@ -22,7 +22,7 @@ console = Console()
 _ALLOWED_CATEGORIES = {
     "DATA_ERROR", "SIGNAL_ERROR", "TIMING_ERROR", "MARKET_EVENT", "MARKET_REGIME",
     "STOP_TOO_TIGHT", "SECTOR_HEADWIND", "FUNDAMENTAL_DETERIORATION",
-    "SENTIMENT_REVERSAL", "OVERCONFIDENCE", "UNKNOWN",
+    "SENTIMENT_REVERSAL", "OVERCONFIDENCE", "COSTS_ATE_PROFIT", "UNKNOWN",
 }
 
 # Losses we should NOT learn from — they reflect market noise, not a bad signal.
@@ -31,7 +31,7 @@ NOISE_CATEGORIES = {"MARKET_EVENT", "SECTOR_HEADWIND", "MARKET_REGIME"}
 # Losses that ARE genuine signal failures — these update the knowledge base.
 SIGNAL_CATEGORIES = {
     "SIGNAL_ERROR", "DATA_ERROR", "TIMING_ERROR", "STOP_TOO_TIGHT",
-    "OVERCONFIDENCE", "FUNDAMENTAL_DETERIORATION",
+    "OVERCONFIDENCE", "FUNDAMENTAL_DETERIORATION", "COSTS_ATE_PROFIT",
 }
 
 # failure_category → KnowledgeEntry.category
@@ -44,6 +44,7 @@ _KNOWLEDGE_CATEGORY = {
     "SENTIMENT_REVERSAL": "FUNDAMENTAL_PATTERN",
     "TIMING_ERROR": "TIMING_PATTERN",
     "STOP_TOO_TIGHT": "INDICATOR_PATTERN",
+    "COSTS_ATE_PROFIT": "INDICATOR_PATTERN",
 }
 
 _SYSTEM = (
@@ -64,6 +65,9 @@ class RootCauseAnalyzer:
         flags = judge.get("flags", []) or []
 
         pnl_pct = trade.pnl_pct
+        gross_pnl_pct = getattr(trade, "gross_pnl_pct", None)
+        if gross_pnl_pct is not None and gross_pnl_pct > 0 and pnl_pct is not None and pnl_pct < 0:
+            return "COSTS_ATE_PROFIT"
         if pnl_pct is not None and pnl_pct < -(LIMITS.stop_loss_pct + 1):
             return "STOP_TOO_TIGHT"
         if market.get("nifty_trend") == "DOWNTREND":
@@ -77,6 +81,12 @@ class RootCauseAnalyzer:
         return "UNKNOWN"
 
     def _default_pattern(self, category: str, sector: str) -> dict:
+        if category == "COSTS_ATE_PROFIT":
+            return {
+                "pattern_id": "costs-ate-profit-general",
+                "description": "Tight-target trades don't clear Indian costs — widen targets",
+                "category": _KNOWLEDGE_CATEGORY[category],
+            }
         sector_slug = (sector or "general").lower().replace(" ", "-")
         return {
             "pattern_id": f"{category.lower().replace('_', '-')}-{sector_slug}",

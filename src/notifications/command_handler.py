@@ -32,36 +32,93 @@ def _bar(frac: float, width: int = 10) -> str:
 
 
 class CommandHandler:
+    # Old command → (new flagship command, one-line redirect note). Old commands
+    # keep working (never break muscle memory) but point at their replacement.
+    _REDIRECTS = {
+        "/status": ("/report", "Merged into /report — showing that instead:"),
+        "/health": ("/report", "Merged into /report — showing that instead:"),
+        "/performance": ("/report", "Merged into /report — showing that instead:"),
+        "/totals": ("/report", "Merged into /report — showing that instead:"),
+        "/pairs": ("/scan", "Merged into /scan pairs — showing that instead:"),
+        "/portfolio": ("/positions", "Merged into /positions — showing that instead:"),
+        "/wins": ("/trades", "Merged into /trades wins — showing that instead:"),
+        "/lessons": ("/trades", "Merged into /trades losses — showing that instead:"),
+        "/knowledge": ("/learn", "Merged into /learn — showing that instead:"),
+        "/learning": ("/learn", "Merged into /learn — showing that instead:"),
+        "/thresholds": ("/learn", "Merged into /learn — showing that instead:"),
+        "/signals": ("/learn", "Merged into /learn — showing that instead:"),
+        "/evaluation": ("/learn", "Merged into /learn — showing that instead:"),
+        "/lessons_file": ("/learn", "Merged into /learn full — showing that instead:"),
+        "/win_chart": ("/chart", "Merged into /chart wins — showing that instead:"),
+        "/force_now": ("/trade", "Merged into /trade — showing that instead:"),
+        "/forced": ("/trade", "Merged into /trade — showing that instead:"),
+        "/resume": ("/pause", "Merged into /pause (toggle) — showing that instead:"),
+        "/conserve": ("/mode", "Merged into /mode — use the buttons instead:"),
+        "/balanced": ("/mode", "Merged into /mode — use the buttons instead:"),
+        "/rogue": ("/mode", "Merged into /mode — use the buttons instead:"),
+        "/funds": ("/report", "Merged into /report — showing that instead:"),
+        "/dashboard_link": ("/dashboard", "Renamed to /dashboard — showing that instead:"),
+        "/enhance": ("/learn", "Merged into /learn — showing that instead:"),
+        "/params": ("/learn", "Merged into /learn — showing that instead:"),
+        "/strategies": ("/report", "Merged into /report — showing that instead:"),
+    }
+
     def __init__(self) -> None:
         self.tg = TelegramNotifier()
+        # FINAL 16-command set surfaced to Telegram's / menu.
         self.commands = {
-            "/start": self._start, "/help": self._help, "/status": self._status,
-            "/positions": self._positions, "/portfolio": self._portfolio,
-            "/funds": self._funds, "/performance": self._performance,
-            "/trades": self._trades, "/wins": self._wins, "/lessons": self._lessons,
-            "/knowledge": self._knowledge, "/signals": self._signals,
-            "/evaluation": self._evaluation, "/enhance": self._enhance,
-            "/params": self._params, "/regime": self._regime, "/scan": self._scan,
-            "/brief": self._brief, "/watchlist": self._watchlist, "/alert": self._alert,
-            "/pause": self._pause, "/resume": self._resume, "/kill": self._kill,
-            "/reset_kill": self._reset_kill, "/health": self._health,
-            "/chart": self._chart, "/win_chart": self._win_chart,
-            "/dashboard_link": self._dashboard_link, "/strategies": self._strategies,
-            "/pairs": self._pairs, "/mode": self._mode, "/conserve": self._conserve,
-            "/balanced": self._balanced, "/rogue": self._rogue,
-            "/learning": self._learning, "/forced": self._forced,
-            "/force_now": self._force_now, "/report": self._handle_report,
-            "/lessons_file": self._handle_lessons_file,
-            "/thresholds": self._handle_thresholds, "/totals": self._handle_totals,
+            "/start": self._start,
+            "/report": self._handle_report,
+            "/scan": self._cmd_scan,
+            "/positions": self._positions,
+            "/trades": self._cmd_trades,
+            "/learn": self._cmd_learn,
+            "/chart": self._cmd_chart,
+            "/mode": self._mode,
+            "/trade": self._cmd_trade,
+            "/regime": self._regime,
+            "/brief": self._brief,
+            "/watchlist": self._watchlist,
+            "/alert": self._alert,
+            "/pause": self._cmd_pause,
+            "/kill": self._kill,
+            "/reset_kill": self._reset_kill,
+            "/dashboard": self._dashboard_link,
         }
+        # Old commands still resolve (never break a typed habit) but redirect.
+        for old_cmd in self._REDIRECTS:
+            self.commands[old_cmd] = self._make_redirect(old_cmd)
+        # Help stays reachable even though it's folded out of the flagship 16.
+        self.commands["/help"] = self._help
 
     # ── lifecycle ──────────────────────────────────────────────────────────────
+    # The 16-command final set, in display order, with crisp descriptions.
+    _MENU = [
+        ("/start", "Welcome + grouped command guide"),
+        ("/report", "Full system state: trades, EV, PF, drawdown, thresholds"),
+        ("/scan", "Run scan; '/scan pairs' for market-neutral"),
+        ("/positions", "Open positions + P&L"),
+        ("/trades", "Last 10 closed; '/trades wins'/'losses' to filter"),
+        ("/learn", "Learning status: KB, replay, thresholds, XGBoost"),
+        ("/chart", "P&L chart; '/chart wins' for win/loss donut"),
+        ("/mode", "Show/switch trading mode (buttons)"),
+        ("/trade", "Force best-available trade now"),
+        ("/regime", "Market regime + strategy advice"),
+        ("/brief", "Daily market brief"),
+        ("/watchlist", "Show/add/remove stocks"),
+        ("/alert", "Price alerts"),
+        ("/pause", "Toggle pause/resume trading"),
+        ("/kill", "Emergency stop (confirm required)"),
+        ("/reset_kill", "Resume after kill switch"),
+        ("/dashboard", "Private dashboard link"),
+    ]
+
     def setup(self) -> None:
-        """Register the / menu in Telegram."""
+        """Register the / menu in Telegram — ONLY the 16 flagship commands,
+        never the old redirected ones (keeps the menu crisp)."""
         if not self.tg.is_configured():
             return
-        cmds = [{"command": c.lstrip("/"), "description": h.__doc__ or c.lstrip("/")}
-                for c, h in self.commands.items()]
+        cmds = [{"command": c.lstrip("/"), "description": d} for c, d in self._MENU]
         try:
             requests.post(_API.format(token=settings.telegram_bot_token, method="setMyCommands"),
                           json={"commands": cmds[:100]}, timeout=10)
@@ -104,6 +161,12 @@ class CommandHandler:
                 time.sleep(5)
 
     def _dispatch(self, update: dict) -> None:
+        if update.get("callback_query"):
+            try:
+                self._handle_callback(update["callback_query"])
+            except Exception as exc:
+                log.debug("Callback handling failed: %s", exc)
+            return
         text = (update.get("message") or {}).get("text", "")
         if not text:
             return
@@ -119,6 +182,24 @@ class CommandHandler:
 
     def _send(self, text: str) -> None:
         self.tg.send_message(text[:_MAX])
+
+    def _make_redirect(self, old_cmd: str):
+        """Builds a handler for a retired command: one-line redirect note, then
+        runs the new flagship handler with the same args."""
+        new_cmd, note = self._REDIRECTS[old_cmd]
+        new_handler_name = {
+            "/report": "_handle_report", "/scan": "_cmd_scan", "/positions": "_positions",
+            "/trades": "_cmd_trades", "/learn": "_cmd_learn", "/chart": "_cmd_chart",
+            "/mode": "_mode", "/trade": "_cmd_trade", "/pause": "_cmd_pause",
+            "/dashboard": "_dashboard_link",
+        }[new_cmd]
+
+        def _redirect(args):
+            self._send(note)
+            getattr(self, new_handler_name)(args)
+
+        _redirect.__doc__ = f"→ {new_cmd}"
+        return _redirect
 
     # ── handlers ───────────────────────────────────────────────────────────────
     # Emoji + advice per regime, surfaced by /regime.
@@ -154,27 +235,10 @@ class CommandHandler:
             f"*Mode:* {settings.mode_label}\n"
             "*Engine:* 4 strategies + pairs trading\n"
             f"*Learning:* {self._get_learning_status()}\n\n"
-            "📊 *TRADING*\n"
-            "/scan — scan the watchlist now\n"
-            "/pairs — market-neutral scan (any market)\n"
-            "/positions — open positions\n"
-            "/brief — today's market brief\n\n"
-            "📈 *PERFORMANCE*\n"
-            "/performance — win rate + stats\n"
-            "/chart — P&L chart image\n"
-            "/trades — last 10 trades\n"
-            "/wins — greatest wins\n"
-            "/lessons — what losses taught us\n\n"
-            "🧠 *LEARNING*\n"
-            "/knowledge — what the system learned\n"
-            "/regime — current market regime\n"
-            "/evaluation — agent accuracy\n"
-            "/enhance — weekly improvement ideas\n\n"
-            "🖥️ *SYSTEM*\n"
-            "/dashboard_link — your private dashboard\n"
-            "/health — full system status\n"
-            "/kill — emergency stop\n"
-            "/help — detailed command list\n\n"
+            "📊 *DAILY:* /report /brief /regime\n"
+            "⚡ *ACTION:* /scan /trade /positions /mode\n"
+            "🧠 *LEARNING:* /learn /trades /chart\n"
+            "⚙️ *CONTROL:* /pause /kill /reset_kill /watchlist /alert /dashboard\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💡 _{get_random_tip()}_"
         )
@@ -182,13 +246,11 @@ class CommandHandler:
     def _help(self, args):
         """grouped command list"""
         self._send(
-            "*Commands*\n"
-            "Trading: /status /positions /scan /pause /resume /kill /reset_kill\n"
-            "Portfolio: /portfolio /funds /performance /trades /wins /lessons\n"
-            "Learning: /knowledge /signals /evaluation /enhance /params /regime /strategies\n"
-            "Markets: /brief /pairs /watchlist /alert\n"
-            "Charts: /chart /win_chart /dashboard_link\n"
-            "System: /health")
+            "*Commands (16 total)*\n"
+            "📊 Daily: /report /brief /regime\n"
+            "⚡ Action: /scan (pairs) /trade /positions /mode\n"
+            "🧠 Learning: /learn (full) /trades (wins/losses) /chart (wins)\n"
+            "⚙️ Control: /pause /kill /reset_kill /watchlist /alert /dashboard")
 
     def _status(self, args):
         """mode, regime, kill switch, positions"""
@@ -363,6 +425,93 @@ class CommandHandler:
             f"{c['symbol']} ({c['score']}) — {c['sector']}" for c in top) if top
             else "No candidates found.")
 
+    def _cmd_scan(self, args):
+        """run a scan; '/scan pairs' for market-neutral"""
+        if args and args[0].lower() == "pairs":
+            self._pairs(args[1:])
+            return
+        self._scan(args)
+
+    def _cmd_trades(self, args):
+        """last 10 closed; '/trades wins' or '/trades losses' to filter"""
+        from src.memory.journal import TradingJournal
+
+        want = args[0].lower() if args else None
+        recent = [t for t in TradingJournal().get_recent(50) if t.outcome in ("WIN", "LOSS")]
+        if want == "wins":
+            rows = sorted([t for t in recent if t.outcome == "WIN"],
+                          key=lambda t: t.pnl_pct or 0, reverse=True)[:10]
+            title = "🏆 *Top wins*"
+        elif want == "losses":
+            rows = [t for t in recent if t.outcome == "LOSS" and t.reflection][:10]
+            title = "📉 *Losses + lessons*"
+            if not rows:
+                self._send("No losses logged with lessons yet.")
+                return
+            self._send(title + "\n" + "\n".join(
+                f"{t.symbol} {t.pnl_pct:+.1f}%: {(t.reflection or '')[:120]}" for t in rows))
+            return
+        else:
+            rows = recent[:10]
+            title = "*Last trades*"
+        if not rows:
+            self._send("No closed trades yet.")
+            return
+        self._send(title + "\n" + "\n".join(
+            f"{'✅' if t.outcome == 'WIN' else '❌'} {t.symbol} {t.pnl_pct:+.1f}%" for t in rows))
+
+    def _cmd_learn(self, args):
+        """learning status: KB, replay, thresholds, XGBoost; '/learn full' = LESSONS.md"""
+        if args and args[0].lower() == "full":
+            self._handle_lessons_file(args[1:])
+            return
+        from src.data.watchlist import ALL_STOCKS
+        from src.learning.historical_replay import HistoricalReplayEngine
+        from src.memory.adaptive_thresholds import AdaptiveThresholds
+        from src.memory.journal import TradingJournal
+        from src.tracking.signal_tracker import SignalTracker
+
+        stats = HistoricalReplayEngine().get_stats()
+        kb = TradingJournal().get_active_knowledge(min_confidence=0.0)
+        top = sorted(kb, key=lambda e: -e.confidence)[:5]
+        top_text = "\n".join(f"  [{e.confidence:.2f}] {e.pattern_description[:50]}"
+                             for e in top) or "  (building…)"
+        thresholds = AdaptiveThresholds().load()
+        thresh_lines = []
+        for regime, data in sorted(thresholds.items()):
+            diff = data.get("judge_min", 6.5) - 6.5
+            arrow = "↑" if diff > 0.1 else "↓" if diff < -0.1 else "→"
+            thresh_lines.append(f"  {arrow} {regime}: {data.get('judge_min', 6.5):.1f}/10 "
+                                f"({data.get('evidence', 0)}t)")
+        signals = SignalTracker().get_best_signals() or "No signal-accuracy data yet."
+        self._send(
+            "📚 *Learning Status*\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Patterns: {len(kb)} total | Replay: {stats['total_stocks_replayed']}/{len(ALL_STOCKS)} stocks\n\n"
+            f"*Top Patterns:*\n{top_text}\n\n"
+            f"*Adaptive Thresholds:*\n" + "\n".join(thresh_lines) + "\n\n"
+            f"*Signal accuracy:*\n{signals}\n\n"
+            "_/learn full sends LESSONS.md._")
+
+    def _cmd_chart(self, args):
+        """P&L chart; '/chart wins' for win/loss donut"""
+        if args and args[0].lower() == "wins":
+            self._win_chart(args[1:])
+            return
+        self._chart(args)
+
+    def _cmd_trade(self, args):
+        """force best-available trade now"""
+        self._force_now(args)
+        self._forced(args)
+
+    def _cmd_pause(self, args):
+        """toggle: pauses if running, resumes if paused"""
+        if Path(_PAUSE_FILE).exists():
+            self._resume(args)
+        else:
+            self._pause(args)
+
     def _brief(self, args):
         """morning market brief"""
         from src.data.market_context import MarketContext
@@ -533,7 +682,7 @@ class CommandHandler:
                 f"_{t['rationale']}_")
 
     def _mode(self, args):
-        """show/set trading mode"""
+        """show current mode + buttons to switch"""
         from src.trading.modes import MODES, get_current_mode, set_mode
 
         if args and args[0].lower() in MODES:
@@ -541,13 +690,38 @@ class CommandHandler:
             self._send(f"{cfg.emoji} Trading mode set to *{cfg.name}*\n{cfg.description}")
             return
         cur = get_current_mode()
-        lines = [f"{cur.emoji} *Current mode: {cur.name}*", cur.description, "",
-                 "Switch with /conserve, /balanced, /rogue:"]
+        lines = [f"{cur.emoji} *Current mode: {cur.name}*", cur.description, ""]
         for c in MODES.values():
             mark = "→ " if c.name == cur.name else "   "
             lines.append(f"{mark}{c.emoji} {c.name}: judge {c.judge_threshold}/10, "
                          f"{c.max_trades_per_week} trades/wk, size ×{c.position_size_multiplier}")
-        self._send("\n".join(lines))
+        self._send_with_mode_buttons("\n".join(lines))
+
+    def _send_with_mode_buttons(self, text: str) -> None:
+        keyboard = {"inline_keyboard": [[
+            {"text": "🛡️ Conserve", "callback_data": "mode:conserve"},
+            {"text": "⚖️ Balanced", "callback_data": "mode:balanced"},
+            {"text": "⚡ Rogue", "callback_data": "mode:rogue"},
+        ]]}
+        try:
+            requests.post(
+                _API.format(token=settings.telegram_bot_token, method="sendMessage"),
+                json={"chat_id": self.tg.chat_id, "text": text[:_MAX], "parse_mode": "Markdown",
+                      "reply_markup": keyboard},
+                timeout=10)
+        except Exception:
+            self._send(text)  # fall back to a plain message if the button send fails
+
+    def _handle_callback(self, callback: dict) -> None:
+        data = callback.get("data", "")
+        cb_id = callback.get("id")
+        try:
+            requests.post(_API.format(token=settings.telegram_bot_token, method="answerCallbackQuery"),
+                         json={"callback_query_id": cb_id}, timeout=10)
+        except Exception:
+            pass
+        if data.startswith("mode:"):
+            self._set_mode_cmd(data.split(":", 1)[1])
 
     def _set_mode_cmd(self, mode: str):
         from src.trading.modes import set_mode
@@ -612,6 +786,20 @@ class CommandHandler:
         sim_total = len(sim_all)
         sim_wr = round(sim_wins / sim_total * 100, 1) if sim_total else 0
 
+        try:
+            pro = pa.get_professional_metrics()
+        except Exception:
+            pro = {"status": "no_data"}
+        pro_text = "Not enough data yet"
+        if pro.get("status") != "no_data":
+            trend_icon = {"IMPROVING": "📈", "STABLE": "➡️", "DECAYING": "📉"}.get(pro.get("trend"), "➡️")
+            pf = pro.get("profit_factor", 0)
+            pf_str = "∞" if pf >= 999 else f"{pf:.2f}"
+            pro_text = (
+                f"Profit Factor: {pf_str} | Max Drawdown: {pro.get('max_drawdown_pct', 0):.1f}%\n"
+                f"Trend: {trend_icon} {pro.get('trend', 'STABLE')} "
+                f"(rolling WR {pro.get('rolling_wr_recent20', 0)}% vs prior {pro.get('rolling_wr_prev20', 0)}%)")
+
         top_kb = sorted(kb, key=lambda e: -e.confidence)[:3]
         kb_lines = []
         for e in top_kb:
@@ -647,6 +835,9 @@ class CommandHandler:
             f"Total: {summary.get('total_trades', 0)}\n"
             f"Win rate: {summary.get('win_rate', 0) * 100:.1f}%\n"
             f"P&L: ₹{summary.get('total_pnl_inr', 0):+.2f}\n\n"
+
+            "*📐 Professional Metrics (all sources, net of costs)*\n"
+            f"{pro_text}\n\n"
 
             "*⚡ Forced Learning (Today)*\n"
             f"{forced['wins']}W / {forced['losses']}L from {forced['total']} trades\n"

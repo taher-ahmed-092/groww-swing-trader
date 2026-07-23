@@ -27,6 +27,7 @@ from src.data.fetcher import MarketDataFetcher
 from src.data.market_calendar import NSECalendar
 from src.data.regime_detector import RegimeDetector
 from src.memory.journal import KnowledgeEntry, TradingJournal
+from src.trading.cost_model import net_pnl_pct
 
 log = logging.getLogger(__name__)
 
@@ -149,7 +150,14 @@ class IntradaySimulator:
             else:
                 exit_price = current
                 outcome = "WIN" if current > entry else "LOSS"
-            pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
+            gross_pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
+            try:
+                from src.data.watchlist import ALL_STOCKS
+
+                tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+            except Exception:
+                tier = "large"
+            pnl_pct = net_pnl_pct(gross_pnl_pct, entry, exit_price, tier, is_intraday=True)
 
             if outcome == "WIN":
                 wins += 1
@@ -162,6 +170,7 @@ class IntradaySimulator:
                 **pos,
                 "exit": exit_price,
                 "pnl_pct": pnl_pct,
+                "gross_pnl_pct": gross_pnl_pct,
                 "outcome": outcome,
                 "closed_at": datetime.now(IST).isoformat(),
             })

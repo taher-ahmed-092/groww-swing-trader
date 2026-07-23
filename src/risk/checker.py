@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 import os
+from datetime import date
+from pathlib import Path
 
 from rich.console import Console
 
@@ -23,6 +25,35 @@ from src.trading.modes import get_current_mode
 console = Console()
 
 DEFAULT_PORTFOLIO_VALUE_INR = 1500.0
+DAILY_LOSS_LIMIT_PCT = -6.0
+DAILY_LOSS_HALT_FILE = Path("data/cache/daily_loss_halt.txt")
+
+
+def is_daily_loss_halted() -> bool:
+    """True if today's cumulative net P&L has already tripped the -6% circuit
+    breaker. All trade-placing jobs (forced/intraday/real) should skip while
+    this is set; it self-clears the moment the date changes."""
+    try:
+        if not DAILY_LOSS_HALT_FILE.exists():
+            return False
+        return DAILY_LOSS_HALT_FILE.read_text().strip() == date.today().isoformat()
+    except OSError:
+        return False
+
+
+def _todays_cumulative_net_pnl_pct() -> float:
+    """Sums today's realized net P&L% across ALL sources (real + forced +
+    intraday + short) — the circuit breaker must see the whole picture, not
+    just the real pipeline's trades."""
+    from src.analytics.trade_loader import load_all_trade_history
+
+    today = date.today().isoformat()
+    total = 0.0
+    for t in load_all_trade_history():
+        closed_at = t.get("closed_at", "") or ""
+        if closed_at[:10] == today:
+            total += t.get("pnl", 0) or 0
+    return round(total, 3)
 
 
 class RiskChecker:
@@ -59,6 +90,29 @@ class RiskChecker:
         # 1. Kill switch.
         if os.path.exists(LIMITS.kill_switch_file):
             return self._reject(["KILL_SWITCH file present — all execution halted."])
+
+        # 1b. Daily loss circuit breaker — halts ALL sources for the rest of the day.
+        if is_daily_loss_halted():
+            return self._reject(["DAILY_LOSS_LIMIT — trading paused until tomorrow."])
+        cumulative_pnl = _todays_cumulative_net_pnl_pct()
+        if cumulative_pnl < DAILY_LOSS_LIMIT_PCT:
+            try:
+                DAILY_LOSS_HALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+                already_alerted = (DAILY_LOSS_HALT_FILE.exists()
+                                   and DAILY_LOSS_HALT_FILE.read_text().strip() == date.today().isoformat())
+                DAILY_LOSS_HALT_FILE.write_text(date.today().isoformat())
+                if not already_alerted:
+                    from src.notifications.telegram_bot import TelegramNotifier
+
+                    TelegramNotifier().send_message(
+                        f"🚨 *DAILY LOSS LIMIT HIT*\n"
+                        f"Cumulative net P&L today: {cumulative_pnl:+.2f}%\n"
+                        f"Trading paused until tomorrow across all sources.")
+            except Exception:
+                pass
+            return self._reject([
+                f"DAILY_LOSS_LIMIT — cumulative net P&L today {cumulative_pnl:+.2f}% "
+                f"< {DAILY_LOSS_LIMIT_PCT}% — trading paused until tomorrow."])
 
         # 2. Confidence floor on both legs.
         # 0.80 is the bar for real-money decisions; demo/testing uses 0.60 so the

@@ -30,6 +30,7 @@ from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
 from src.data.watchlist import ALL_STOCKS, LARGE_CAP
 from src.memory.journal import KnowledgeEntry, TradingJournal
+from src.trading.cost_model import net_pnl_pct
 
 log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -53,6 +54,10 @@ class AlwaysOnTrader:
     def ensure_daily_trades(self) -> list[dict]:
         """Place forced trades until today's count reaches the daily target.
         Up to 3 per call. Market hours → live forced; otherwise → historical sim."""
+        from src.risk.checker import is_daily_loss_halted
+
+        if is_daily_loss_halted():
+            return []
         placed_today = self._count_todays_forced_trades()
         if placed_today >= self.MAX_DAILY_TRADES:
             return []
@@ -230,12 +235,15 @@ class AlwaysOnTrader:
                 else:
                     outcome = "WIN" if fclose > entry else "LOSS"
                     exit_price = fclose
-            pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
+            gross_pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
+            tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+            pnl_pct = net_pnl_pct(gross_pnl_pct, entry, exit_price, tier, is_intraday=True)
 
             now_iso = datetime.now(IST).isoformat()
             return {
                 "symbol": symbol, "entry": entry, "stop": stop, "target": target,
-                "exit": exit_price, "pnl_pct": pnl_pct, "outcome": outcome,
+                "exit": exit_price, "pnl_pct": pnl_pct, "gross_pnl_pct": gross_pnl_pct,
+                "outcome": outcome,
                 "signal_score": score, "opened_at": now_iso, "closed_at": now_iso,
                 "trade_type": "HISTORICAL_SIM",
                 "rationale": (f"Historical sim: {symbol} RSI {(ind.get('rsi_14') or 50):.0f} "
@@ -283,8 +291,10 @@ class AlwaysOnTrader:
             else:
                 outcome = "WIN" if current > entry else "LOSS"
                 exit_price = current
-            pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
-            return {**trade, "exit": exit_price, "pnl_pct": pnl_pct,
+            gross_pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
+            tier = trade.get("tier") or ALL_STOCKS.get(symbol, {}).get("tier", "large")
+            pnl_pct = net_pnl_pct(gross_pnl_pct, entry, exit_price, tier, is_intraday=True)
+            return {**trade, "exit": exit_price, "pnl_pct": pnl_pct, "gross_pnl_pct": gross_pnl_pct,
                     "outcome": outcome, "closed_at": datetime.now(IST).isoformat()}
         except Exception:
             return None
