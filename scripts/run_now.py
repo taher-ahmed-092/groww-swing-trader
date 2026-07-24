@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -45,6 +46,29 @@ def _show_detail(symbol: str, final: dict) -> None:
 
 def _kill_switch_active() -> bool:
     return os.path.exists(LIMITS.kill_switch_file)
+
+
+def _clear_spurious_halt_file() -> None:
+    """A daily-loss halt file left over from before the real-trades-only
+    circuit breaker fix (or any other stale state) has no basis if 0 real
+    trades have been placed today — clear it so it never blocks the very
+    first real trade."""
+    from datetime import datetime
+
+    halt_file = Path("data/cache/daily_loss_halt.txt")
+    if not halt_file.exists():
+        return
+    from src.memory.journal import TradingJournal
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    todays_real = [
+        t for t in TradingJournal().get_recent(n=50)
+        if t.executed_at and t.executed_at.strftime("%Y-%m-%d") == today
+        and t.outcome in ("WIN", "LOSS")
+    ]
+    if not todays_real:
+        halt_file.unlink(missing_ok=True)
+        console.print("[dim]Note: cleared simulation-triggered halt file[/dim]")
 
 
 def _scout_table(candidates: list[dict], regime: dict) -> Table:
@@ -249,6 +273,8 @@ def main() -> int:
     if _kill_switch_active():
         console.print("[bold red]KILL_SWITCH present — halting. Remove the file to proceed.[/bold red]")
         return 1
+
+    _clear_spurious_halt_file()
 
     if args.strategies:
         _print_strategy_breakdown()

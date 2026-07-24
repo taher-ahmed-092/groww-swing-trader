@@ -829,6 +829,19 @@ if __name__ == "__main__":
     console.print("[green]Verify setup: uv run python scripts/verify_setup.py[/green]")
     console.print("[green]Press Ctrl+C to stop. KILL_SWITCH file halts all jobs immediately.[/green]")
 
+    try:
+        kb = TradingJournal().get_active_knowledge(min_confidence=0.0)
+        from src.memory.auto_rules import AutoRuleExtractor
+
+        rules = AutoRuleExtractor.load()
+        n_rules = (len(rules.get("stock_vetoes", {})) + len(rules.get("stock_boosts", {}))
+                  + len(rules.get("setup_vetoes", [])) + len(rules.get("setup_boosts", [])))
+        max_conf = max((e.confidence for e in kb), default=0.0)
+        console.print(f"[cyan]KB: {len(kb)} patterns | Auto-rules: {n_rules} | "
+                      f"Max conf: {max_conf:.0%}[/cyan]")
+    except Exception as exc:
+        console.print(f"[yellow]KB status unavailable: {exc}[/yellow]")
+
     scheduler = BackgroundScheduler(timezone=TZ)
     scheduler.add_job(weekly_research_job, "cron", day_of_week="sun", hour=19, minute=0)
     scheduler.add_job(daily_premarket_job, "cron", day_of_week="mon-fri", hour=9, minute=0)

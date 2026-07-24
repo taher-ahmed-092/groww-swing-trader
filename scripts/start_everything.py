@@ -180,6 +180,23 @@ def main() -> int:
     except Exception as exc:
         console.print(f"[yellow]Startup scan/sim failed: {exc} — continuing.[/]")
 
+    # Surface current learning recommendations immediately rather than making
+    # the user go find and open LESSONS.md themselves.
+    try:
+        lessons = Path("LESSONS.md")
+        if lessons.exists():
+            content = lessons.read_text()
+            if "## Recommendations" in content:
+                start = content.find("## Recommendations")
+                end = content.find("\n##", start + 1)
+                rec_section = content[start:end if end > 0 else start + 500]
+                console.print(Panel(
+                    rec_section.replace("## Recommendations", "").strip(),
+                    title="[cyan]Current Learning Recommendations[/]",
+                    border_style="cyan"))
+    except Exception as exc:
+        console.print(f"[yellow]Could not read LESSONS.md recommendations: {exc}[/]")
+
     try:
         while True:
             time.sleep(10)
