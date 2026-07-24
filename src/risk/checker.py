@@ -7,6 +7,7 @@ raises on a normal rejection.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 from datetime import date
@@ -23,9 +24,10 @@ from src.risk.position_sizer import PositionSizer
 from src.trading.modes import get_current_mode
 
 console = Console()
+log = logging.getLogger(__name__)
 
 DEFAULT_PORTFOLIO_VALUE_INR = 1500.0
-DAILY_LOSS_LIMIT_PCT = -6.0
+DAILY_LOSS_LIMIT_PCT = LIMITS.daily_loss_limit_pct
 DAILY_LOSS_HALT_FILE = Path("data/cache/daily_loss_halt.txt")
 
 
@@ -41,19 +43,40 @@ def is_daily_loss_halted() -> bool:
         return False
 
 
-def _todays_cumulative_net_pnl_pct() -> float:
-    """Sums today's realized net P&L% across ALL sources (real + forced +
-    intraday + short) — the circuit breaker must see the whole picture, not
-    just the real pipeline's trades."""
-    from src.analytics.trade_loader import load_all_trade_history
-
+def _todays_real_trades(journal: TradingJournal | None = None) -> list:
+    """Today's REAL trades (closed, WIN/LOSS) from TradingJournal only —
+    excludes forced/intraday/short simulation history entirely. Bug fixed:
+    the circuit breaker previously summed P&L across ALL sources including
+    simulations, so simulation losses (not real capital) could halt real
+    signal evaluation with 0 real trades ever placed."""
+    j = journal or TradingJournal()
     today = date.today().isoformat()
-    total = 0.0
-    for t in load_all_trade_history():
-        closed_at = t.get("closed_at", "") or ""
-        if closed_at[:10] == today:
-            total += t.get("pnl", 0) or 0
+    return [
+        t for t in j.get_recent(n=200)
+        if t.closed_at and t.closed_at.date().isoformat() == today
+        and t.outcome in ("WIN", "LOSS")
+    ]
+
+
+def _todays_cumulative_net_pnl_pct(journal: TradingJournal | None = None) -> float:
+    """Sums today's realized net P&L% across REAL TradingJournal trades only.
+    Simulated/forced/intraday/short trade history never contributes — those
+    are learning-volume simulations, not capital at risk."""
+    total = sum(t.pnl_pct or 0 for t in _todays_real_trades(journal))
     return round(total, 3)
+
+
+def _clear_spurious_halt_if_no_real_trades(journal: TradingJournal | None = None) -> None:
+    """If a halt file exists but zero real trades closed today, it was
+    triggered (or is stale) from a state that predates the real-trades-only
+    circuit breaker, or from simulation P&L under the old buggy logic —
+    either way it cannot be justified by real capital loss. Remove it."""
+    try:
+        if DAILY_LOSS_HALT_FILE.exists() and not _todays_real_trades(journal):
+            DAILY_LOSS_HALT_FILE.unlink(missing_ok=True)
+            log.info("Removed spurious daily-loss halt: 0 real trades today.")
+    except OSError:
+        pass
 
 
 class RiskChecker:
@@ -91,28 +114,38 @@ class RiskChecker:
         if os.path.exists(LIMITS.kill_switch_file):
             return self._reject(["KILL_SWITCH file present — all execution halted."])
 
-        # 1b. Daily loss circuit breaker — halts ALL sources for the rest of the day.
-        if is_daily_loss_halted():
+        # 1b. Daily loss circuit breaker — real capital protection ONLY.
+        # Computed exclusively from real TradingJournal trades; forced/intraday/
+        # short simulation P&L never counts (those are learning simulations, not
+        # capital at risk). With 0 real trades today, the breaker cannot fire —
+        # there is nothing real to protect from — and any halt file left over
+        # from before this fix (or from a stale/bugged state) is cleared.
+        _clear_spurious_halt_if_no_real_trades(self.journal)
+        todays_real = _todays_real_trades(self.journal)
+        if not todays_real:
+            pass  # 0 real trades today — circuit breaker cannot fire, skip entirely
+        elif is_daily_loss_halted():
             return self._reject(["DAILY_LOSS_LIMIT — trading paused until tomorrow."])
-        cumulative_pnl = _todays_cumulative_net_pnl_pct()
-        if cumulative_pnl < DAILY_LOSS_LIMIT_PCT:
-            try:
-                DAILY_LOSS_HALT_FILE.parent.mkdir(parents=True, exist_ok=True)
-                already_alerted = (DAILY_LOSS_HALT_FILE.exists()
-                                   and DAILY_LOSS_HALT_FILE.read_text().strip() == date.today().isoformat())
-                DAILY_LOSS_HALT_FILE.write_text(date.today().isoformat())
-                if not already_alerted:
-                    from src.notifications.telegram_bot import TelegramNotifier
+        else:
+            cumulative_pnl = _todays_cumulative_net_pnl_pct(self.journal)
+            if cumulative_pnl < DAILY_LOSS_LIMIT_PCT:
+                try:
+                    DAILY_LOSS_HALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    already_alerted = (DAILY_LOSS_HALT_FILE.exists()
+                                       and DAILY_LOSS_HALT_FILE.read_text().strip() == date.today().isoformat())
+                    DAILY_LOSS_HALT_FILE.write_text(date.today().isoformat())
+                    if not already_alerted:
+                        from src.notifications.telegram_bot import TelegramNotifier
 
-                    TelegramNotifier().send_message(
-                        f"🚨 *DAILY LOSS LIMIT HIT*\n"
-                        f"Cumulative net P&L today: {cumulative_pnl:+.2f}%\n"
-                        f"Trading paused until tomorrow across all sources.")
-            except Exception:
-                pass
-            return self._reject([
-                f"DAILY_LOSS_LIMIT — cumulative net P&L today {cumulative_pnl:+.2f}% "
-                f"< {DAILY_LOSS_LIMIT_PCT}% — trading paused until tomorrow."])
+                        TelegramNotifier().send_message(
+                            f"🚨 *DAILY LOSS LIMIT HIT*\n"
+                            f"Cumulative REAL net P&L today: {cumulative_pnl:+.2f}%\n"
+                            f"Trading paused until tomorrow (real trades only).")
+                except Exception:
+                    pass
+                return self._reject([
+                    f"DAILY_LOSS_LIMIT — cumulative REAL net P&L today {cumulative_pnl:+.2f}% "
+                    f"< {DAILY_LOSS_LIMIT_PCT}% — trading paused until tomorrow."])
 
         # 2. Confidence floor on both legs.
         # 0.80 is the bar for real-money decisions; demo/testing uses 0.60 so the

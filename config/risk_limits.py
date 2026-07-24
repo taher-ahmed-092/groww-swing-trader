@@ -30,5 +30,12 @@ class RiskLimits:
     # ── Kill switch ─────────────────────────────────────────────
     kill_switch_file: str = "KILL_SWITCH"    # presence of this file halts all execution
 
+    # ── Daily loss circuit breaker ──────────────────────────────
+    # Real-money-protection threshold — computed ONLY from real TradingJournal
+    # trades (src/risk/checker.py). Forced/intraday/short simulation P&L never
+    # counts toward this: those are learning-volume simulations, not capital
+    # at risk, and must never halt real signal evaluation.
+    daily_loss_limit_pct: float = -6.0
+
 
 LIMITS = RiskLimits()

@@ -172,6 +172,37 @@ def _print_why_no_trade(finals: list[dict], regime: dict) -> None:
     if approved:
         return
 
+    # DAILY_LOSS_LIMIT is a risk_check rejection reason, not a judge flag — check
+    # it first since a circuit-breaker halt overrides any market-direction story.
+    # If this ever fires with 0 real trades today it's a bug (simulation P&L must
+    # never trip the real-capital breaker) — checker.py's own guard now prevents
+    # that at the source, but this surfaces it loudly if it somehow still happens.
+    daily_loss_reasons = [
+        r for f in finals for r in (f.get("risk_check", {}).get("reasons") or [])
+        if "DAILY_LOSS_LIMIT" in r
+    ]
+    if daily_loss_reasons:
+        from src.risk.checker import _todays_real_trades
+
+        real_today = _todays_real_trades()
+        if not real_today:
+            console.print(Panel(
+                "DAILY_LOSS_LIMIT fired with 0 real trades today — this should be "
+                "impossible after the circuit-breaker fix (it only reads real "
+                "TradingJournal P&L, never simulation history). If you're seeing "
+                "this, RiskChecker's own guard did not clear it — investigate before "
+                "trusting today's results.",
+                title="⚠️ UNEXPECTED CIRCUIT BREAKER STATE", border_style="red",
+            ))
+        else:
+            console.print(Panel(
+                f"DAILY LOSS LIMIT: {len(real_today)} real trade(s) closed today.\n"
+                f"{daily_loss_reasons[0]}\n"
+                "System protecting real capital. Resumes tomorrow.",
+                title="🛑 DAILY LOSS LIMIT", border_style="red",
+            ))
+        return
+
     flags = _all_flags(finals)
     mc = finals[0].get("market_context", {})
     rsi = mc.get("nifty_rsi") or 0
