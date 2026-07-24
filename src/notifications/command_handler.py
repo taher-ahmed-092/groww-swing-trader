@@ -86,6 +86,7 @@ class CommandHandler:
             "/dashboard": self._dashboard_link,
             "/flows": self._handle_flows,
             "/diagnose": self._handle_diagnose,
+            "/health_check": self._handle_health_check,
         }
         # Old commands still resolve (never break a typed habit) but redirect.
         for old_cmd in self._REDIRECTS:
@@ -115,6 +116,7 @@ class CommandHandler:
         ("/dashboard", "Private dashboard link"),
         ("/flows", "Institutional flows + economic calendar"),
         ("/diagnose", "Why real trades aren't clearing the pipeline"),
+        ("/health_check", "Full 9-component system health check"),
     ]
 
     def setup(self) -> None:
@@ -1073,6 +1075,17 @@ class CommandHandler:
             capture_output=True, text=True, timeout=60, cwd=".")
         output = result.stdout[-3000:] if result.stdout else (result.stderr or "")[-3000:]
         self._send(f"```\n{output}\n```")
+
+    def _handle_health_check(self, args):
+        """runs the full 9-component system health check on demand"""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "scripts/system_health_check.py"],
+            capture_output=True, text=True, timeout=120, cwd=".")
+        output = (result.stdout or result.stderr or "No output")[-3000:]
+        self._send(f"```\n{output[:2000]}\n```")
 
     def _pairs(self, args):
         """pairs opportunities"""

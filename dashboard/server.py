@@ -337,6 +337,14 @@ def collect_dashboard_data() -> dict:
         except Exception:
             xgb_available = False
 
+        try:
+            from src.learning.continuous_simulator import ContinuousSimulator
+
+            continuous_sim = ContinuousSimulator().get_stats()
+        except Exception:
+            continuous_sim = {"total": 0, "wins": 0, "losses": 0, "win_rate": 0,
+                              "stocks_covered": 0, "recent": []}
+
         now_ist = datetime.now(IST)
         data = {
             "timestamp": now_ist.isoformat(),
@@ -381,6 +389,7 @@ def collect_dashboard_data() -> dict:
             "rf_model": rf_model,
             "xgb_available": xgb_available,
             "stock_priors_count": stock_priors_count,
+            "continuous_sim": continuous_sim,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)

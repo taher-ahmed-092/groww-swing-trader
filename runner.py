@@ -727,6 +727,63 @@ def forced_close_job() -> None:
             _broadcast_trade_event_safe("TRADE_CLOSED", t)
 
 
+def continuous_sim_job() -> None:
+    """Every 30 minutes, 24/7 — unlimited historical-data paper simulations.
+    Runs regardless of market hours; during market hours it augments
+    forced_trade_job's live activity, off-hours it's the only source of new
+    learning data (src/learning/continuous_simulator.py)."""
+    if _kill_switch():
+        return
+    from src.learning.continuous_simulator import ContinuousSimulator
+
+    result = ContinuousSimulator().run_batch()
+    if result["simulated"] > 0:
+        console.print(
+            f"[cyan][CONT-SIM] {result['simulated']} sims: "
+            f"{result['wins']}W/{result['losses']}L, "
+            f"{result['new_patterns']} new patterns[/cyan]")
+
+
+def drift_check_job() -> None:
+    """Every 6 hours — detect win-rate/pattern/regime drift and auto-adapt
+    (confidence decay + auto-rule regeneration) if found."""
+    if _kill_switch():
+        return
+    from src.analytics.drift_detector import DriftDetector
+
+    results = DriftDetector().check_and_respond()
+    if results.get("any_drift"):
+        wr, pat, reg = results["wr_drift"], results["pattern_drift"], results["regime_drift"]
+        parts = []
+        if wr.get("detected"):
+            parts.append(f"WR: {wr['message']}")
+        if pat.get("detected"):
+            parts.append(f"{pat['drifted_count']} patterns drifting")
+        if reg.get("detected"):
+            parts.append(f"Regime: {reg['message']}")
+        console.print(f"[yellow][JOB] Concept drift detected: {parts}[/yellow]")
+        TelegramNotifier().send_message(
+            "⚠️ *Concept Drift Detected*\n" + "\n".join(parts) + "\n"
+            "Auto-adapting: confidence decayed, rules regenerated."
+        )
+    else:
+        console.print("[dim][JOB] Drift check: stable[/dim]")
+
+
+def triday_health_check_job() -> None:
+    """Every 3 days at 8:00 PM IST — full system health check, reported to
+    Telegram (scripts/system_health_check.py sends its own report)."""
+    if _kill_switch():
+        return
+    import subprocess
+
+    try:
+        subprocess.run([sys.executable, "scripts/system_health_check.py"],
+                       cwd=".", timeout=120)
+    except Exception as exc:
+        console.print(f"[yellow][JOB] health check failed: {exc}[/yellow]")
+
+
 def daily_forced_summary_job() -> None:
     """Mon-Fri 4:00 PM IST — one daily learning summary instead of per-close spam."""
     if _kill_switch():
@@ -788,6 +845,9 @@ if __name__ == "__main__":
     scheduler.add_job(forced_trade_job, "cron", minute="*/15")
     scheduler.add_job(forced_close_job, "cron", minute="7,22,37,52")
     scheduler.add_job(daily_forced_summary_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
+    scheduler.add_job(continuous_sim_job, "cron", minute="*/30")
+    scheduler.add_job(drift_check_job, "cron", hour="*/6")
+    scheduler.add_job(triday_health_check_job, "cron", day="*/3", hour=20, minute=0)
     scheduler.start()
 
     # Telegram connectivity check — sends a hello message if configured.

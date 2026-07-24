@@ -429,15 +429,24 @@ class TradingJournal:
         return entry
 
     def update_knowledge_confidence(
-        self, pattern_id: str, confirmed: bool
+        self, pattern_id: str, confirmed: Optional[bool] = None,
+        force_confidence: Optional[float] = None,
     ) -> Optional[KnowledgeEntry]:
+        """confirmed=True/False: normal outcome-driven nudge (+0.1/-0.05).
+        force_confidence: set confidence to an exact value instead — used by
+        DriftDetector to decay all pattern confidences by a fixed factor when
+        concept drift is detected. Pass confirmed=None with force_confidence
+        set for a neutral decay (no observed_count/last_confirmed bump)."""
         with Session(self.engine) as session:
             entry = session.exec(
                 select(KnowledgeEntry).where(KnowledgeEntry.pattern_id == pattern_id)
             ).first()
             if entry is None:
                 return None
-            if confirmed:
+            if force_confidence is not None:
+                entry.confidence = round(force_confidence, 4)
+                entry.observed_count += 1  # count as an update
+            elif confirmed:
                 entry.confidence = min(1.0, round(entry.confidence + 0.1, 4))
                 entry.observed_count += 1
                 entry.last_confirmed = _now()

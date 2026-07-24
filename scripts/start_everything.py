@@ -145,6 +145,41 @@ def main() -> int:
             "[dim]Ctrl+C to stop all services.[/]",
             border_style="green"))
 
+    # Immediate action on startup rather than waiting for the next scheduled
+    # slot: if the market is open right now, run a real scan immediately; if
+    # closed, kick off one continuous-simulation batch so learning starts
+    # right away instead of waiting up to 30 minutes for the cron job.
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        ist = ZoneInfo("Asia/Kolkata")
+        now = datetime.now(ist)
+        is_weekday = now.weekday() < 5
+        market_open = is_weekday and (9 * 60 + 15 <= now.hour * 60 + now.minute <= 15 * 60 + 30)
+
+        if market_open:
+            console.print("[cyan]Market is OPEN — running immediate scan…[/]")
+            pairs_result = subprocess.run(
+                [sys.executable, "scripts/run_now.py", "--pairs"],
+                cwd=_REPO_ROOT, capture_output=True, text=True, timeout=120)
+            console.print(pairs_result.stdout[-500:] if pairs_result.stdout else "No output")
+            scan_result = subprocess.run(
+                [sys.executable, "scripts/run_now.py", "--scan"],
+                cwd=_REPO_ROOT, capture_output=True, text=True, timeout=180)
+            console.print(scan_result.stdout[-300:] if scan_result.stdout else "No output")
+        else:
+            console.print(
+                "[yellow]Market CLOSED — market opens 9:15 AM IST weekdays. "
+                "Continuous simulation running until then.[/]")
+            subprocess.Popen(
+                [sys.executable, "-c",
+                 "from src.learning.continuous_simulator import ContinuousSimulator; "
+                 "r = ContinuousSimulator().run_batch(); print(f'Sim batch: {r}')"],
+                cwd=_REPO_ROOT)
+    except Exception as exc:
+        console.print(f"[yellow]Startup scan/sim failed: {exc} — continuing.[/]")
+
     try:
         while True:
             time.sleep(10)
