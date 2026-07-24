@@ -29,21 +29,22 @@ class TradingModeConfig:
     max_trades_per_week: int
     position_size_multiplier: float  # applied on top of Kelly + tier sizing
     trades_downtrends: bool          # if True, judge won't auto-veto longs in a downtrend
+    require_adx_trending: bool       # if True, judge auto-vetoes CHOPPY_MARKET (choppy ADX)
     description: str
 
 
 MODES: dict[str, TradingModeConfig] = {
     "conserve": TradingModeConfig(
         name="conserve", emoji="🛡️", judge_threshold=8.0, max_trades_per_week=2,
-        position_size_multiplier=0.5, trades_downtrends=False,
+        position_size_multiplier=0.5, trades_downtrends=False, require_adx_trending=True,
         description="Capital protection. High bar, fewer trades, half position size."),
     "balanced": TradingModeConfig(
         name="balanced", emoji="⚖️", judge_threshold=6.5, max_trades_per_week=3,
-        position_size_multiplier=1.0, trades_downtrends=False,
+        position_size_multiplier=1.0, trades_downtrends=False, require_adx_trending=False,
         description="Default. Moderate bar, full Kelly size."),
     "rogue": TradingModeConfig(
         name="rogue", emoji="⚡", judge_threshold=5.5, max_trades_per_week=5,
-        position_size_multiplier=1.0, trades_downtrends=True,
+        position_size_multiplier=1.0, trades_downtrends=True, require_adx_trending=False,
         description="Eager learning. Low bar, more trades, will trade downtrends."),
 }
 

@@ -17,6 +17,8 @@ from ta.volume import (
     VolumeWeightedAveragePrice,
 )
 
+from src.utils.serialization import sanitize_for_state
+
 
 def _last(series) -> float | None:
     try:
@@ -403,4 +405,4 @@ def compute_indicators(df: pd.DataFrame) -> dict:
         else:
             result["rsi_signal"] = "NEUTRAL"
 
-    return result
+    return sanitize_for_state(result)

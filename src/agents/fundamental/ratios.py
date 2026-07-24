@@ -6,6 +6,8 @@ Missing fields become None; floats are rounded to 4 dp. Never divides by zero.
 """
 from __future__ import annotations
 
+from src.utils.serialization import sanitize_for_state
+
 
 def _round(value, ndigits: int = 4):
     try:
@@ -123,7 +125,7 @@ def compute_ratios(info: dict) -> dict:
     pscore, pscore_evaluated = piotroski_f_score(info)
 
     # debt_to_equity comes from yfinance as a percentage (e.g. 45.2) — keep as-is, rounded.
-    return {
+    return sanitize_for_state({
         "pe_ratio": _round(info.get("trailingPE")),
         "pb_ratio": _round(info.get("priceToBook")),
         "ps_ratio": _round(info.get("priceToSalesTrailing12Months")),
@@ -145,4 +147,4 @@ def compute_ratios(info: dict) -> dict:
         "fcf_yield_label": fcf_label,
         "ev_ebitda": _round(info.get("enterpriseToEbitda")),
         "payout_ratio": _round(info.get("payoutRatio")),
-    }
+    })

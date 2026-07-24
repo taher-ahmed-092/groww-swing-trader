@@ -58,7 +58,11 @@ class LLMJudge:
             flags.append("TECHNICAL_SKIP")
         if rr is not None and rr < 1.5:
             flags.append("POOR_RISK_REWARD")
-        if adx_signal == "CHOPPY":
+        # Only auto-veto on choppy ADX in modes that require a trending market
+        # (conserve). Balanced/rogue let the LLM scorecard weigh chop instead
+        # of a hard pre-LLM rejection — this was previously unconditional,
+        # silently overriding balanced/rogue mode's intent.
+        if adx_signal == "CHOPPY" and mode.require_adx_trending:
             flags.append("CHOPPY_MARKET")
         # Rogue mode intentionally trades downtrends — it lowers the bar but never
         # bypasses the rest of the pipeline (stop-loss + judge scorecard still apply).

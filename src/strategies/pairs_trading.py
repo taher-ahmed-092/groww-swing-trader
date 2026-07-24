@@ -12,6 +12,7 @@ import pandas as pd
 from config.risk_limits import LIMITS
 from src.data.fetcher import MarketDataFetcher
 from src.strategies.base import Strategy
+from src.utils.serialization import sanitize_for_state
 
 # Same-sector, fundamentally linked, historically correlated pairs.
 STOCK_PAIRS = [
@@ -83,7 +84,8 @@ class PairsTradingStrategy(Strategy):
                               f"(corr {correlation:.2f}) — mean reversion expected"),
                 "sector": sector,
             })
-        return sorted(opportunities, key=lambda x: abs(x["z_score"]), reverse=True)
+        opportunities.sort(key=lambda x: abs(x["z_score"]), reverse=True)
+        return [sanitize_for_state(opp) for opp in opportunities]
 
     def generate_signal(self, df: pd.DataFrame, indicators: dict, context: dict) -> dict:
         """Fires when a precomputed pairs opportunity for this symbol is in context."""

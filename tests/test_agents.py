@@ -25,12 +25,29 @@ def _base_state():
     return state
 
 
-def test_auto_veto_choppy_market():
+def test_auto_veto_choppy_market(monkeypatch):
+    # CHOPPY_MARKET only auto-vetoes in modes that require a trending market
+    # (conserve). Balanced/rogue intentionally let the LLM scorecard weigh
+    # chop instead of a hard pre-LLM rejection (src/trading/modes.py
+    # require_adx_trending) -- this test exercises the conserve-mode case.
+    from src.trading.modes import MODES
+
+    monkeypatch.setattr("src.judge.evaluator.get_current_mode", lambda: MODES["conserve"])
     state = _base_state()
     state["technical_verdict"]["indicators"]["adx_signal"] = "CHOPPY"
     verdict = LLMJudge().evaluate(state)
     assert verdict["approved"] is False
     assert "CHOPPY_MARKET" in verdict["flags"]
+
+
+def test_no_choppy_veto_in_balanced_mode(monkeypatch):
+    from src.trading.modes import MODES
+
+    monkeypatch.setattr("src.judge.evaluator.get_current_mode", lambda: MODES["balanced"])
+    state = _base_state()
+    state["technical_verdict"]["indicators"]["adx_signal"] = "CHOPPY"
+    verdict = LLMJudge().evaluate(state)
+    assert "CHOPPY_MARKET" not in verdict["flags"]
 
 
 def test_auto_veto_fighting_nifty():

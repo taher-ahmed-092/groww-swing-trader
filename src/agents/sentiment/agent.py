@@ -9,6 +9,7 @@ returns a neutral result when nothing is found.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,7 @@ from config.settings import settings
 from src.llm import get_llm, parse_json_response
 
 console = Console()
+log = logging.getLogger(__name__)
 
 _CACHE_DIR = os.path.join("data", "cache")
 _HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.nseindia.com"}
@@ -188,7 +190,7 @@ class SocialSentimentAgent:
 
     def _get_reddit_sentiment(self, symbol: str, company_name: str) -> list[dict]:
         if not (settings.reddit_client_id and settings.reddit_client_secret):
-            console.print("[yellow][SENTIMENT] Reddit skipped: no credentials[/yellow]")
+            log.debug("Reddit skipped: no credentials")
             return []
         try:
             import praw
