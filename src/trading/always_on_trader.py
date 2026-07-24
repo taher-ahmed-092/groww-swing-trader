@@ -30,7 +30,7 @@ from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
 from src.data.watchlist import ALL_STOCKS, LARGE_CAP
 from src.memory.journal import KnowledgeEntry, TradingJournal
-from src.trading.cost_model import net_pnl_pct
+from src.trading.cost_model import compute_round_trip_costs, net_pnl_pct
 
 log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -40,6 +40,12 @@ FORCED_TRADE_UNIVERSE = list(ALL_STOCKS.keys())
 
 FORCED_TRADE_FILE = Path("data/cache/forced_trades_today.json")
 FORCED_HISTORY_FILE = Path("data/cache/forced_trades_history.json")
+# Audit finding: this was capped at 200, and the forced-trade engine places
+# enough volume (~200/day) to fully cycle the cap within a single day — so ML
+# training only ever sees a few hours of history, not weeks of it. Raised so
+# accumulated volume actually grows the training set instead of perpetually
+# discarding everything older than "today."
+HISTORY_RETENTION = 3000
 
 
 class AlwaysOnTrader:
@@ -113,7 +119,7 @@ class AlwaysOnTrader:
         if closed:
             history = self._load_history()
             history.extend(closed)
-            self._write_json(FORCED_HISTORY_FILE, history[-200:])
+            self._write_json(FORCED_HISTORY_FILE, history[-HISTORY_RETENTION:])
         return closed
 
     def get_todays_summary(self) -> dict:
@@ -220,8 +226,10 @@ class AlwaysOnTrader:
                 return None
             score = self._quick_score(ind)
             atr = ind.get("atr_14") or (entry * 0.02)
-            stop = max(round(entry - 1.5 * atr, 2), round(entry * 0.93, 2))  # ≤7% stop
-            target = round(entry + 2.0 * (entry - stop), 2)
+            tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+            stop, target, meets_min_move = self._stop_target_for_costs(entry, atr, tier)
+            if not meets_min_move:
+                return None
 
             outcome, exit_price = "LOSS", entry
             if len(df_after) > 0:
@@ -236,7 +244,6 @@ class AlwaysOnTrader:
                     outcome = "WIN" if fclose > entry else "LOSS"
                     exit_price = fclose
             gross_pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
-            tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
             pnl_pct = net_pnl_pct(gross_pnl_pct, entry, exit_price, tier, is_intraday=True)
 
             now_iso = datetime.now(IST).isoformat()
@@ -254,14 +261,39 @@ class AlwaysOnTrader:
         except Exception:
             return None
 
+    # ── stop/target sizing (cost-aware) ──────────────────────────────────────
+    @staticmethod
+    def _stop_target_for_costs(entry: float, atr: float, tier: str) -> tuple[float, float, bool]:
+        """ATR-based stop (capped at 7%), but the target is sized off real
+        transaction costs rather than a flat 2:1 R:R. Audit finding: net
+        expectancy was -0.21%/trade despite +0.24% gross — a 2:1 R:R on a tiny
+        ATR stop produces targets that look fine on paper but get eaten by
+        STT/slippage/GST once most trades exit on time (not target) at a small
+        gross gain. Target = max(6%, 8x round-trip costs) so even a partial hit
+        rate on target vs time-exit still clears costs with margin. Also reports
+        whether this stock's own recent volatility (ATR) is even large enough to
+        plausibly reach a cost-clearing move — trades on dead-quiet stocks get
+        skipped rather than forced.
+        """
+        stop = max(round(entry - 1.5 * atr, 2), round(entry * 0.93, 2))  # <=7% stop
+        costs = compute_round_trip_costs(entry, entry * 1.06, 1, tier, is_intraday=True)
+        min_target_pct = max(6.0, costs.total_pct * 8)
+        target = round(entry * (1 + min_target_pct / 100), 2)
+        min_move_needed_pct = costs.total_pct * 3
+        recent_atr_pct = (atr / entry * 100) if entry else 0.0
+        meets_min_move = recent_atr_pct >= min_move_needed_pct
+        return stop, target, meets_min_move
+
     # ── trade building ───────────────────────────────────────────────────────
     def _build_trade_record(self, symbol: str, entry: float, indicators: dict,
                             signal_score: float, rationale: str,
                             trade_type: str, **kwargs) -> Optional[dict]:
         try:
             atr = indicators.get("atr_14") or (entry * 0.02)
-            stop = max(round(entry - 1.5 * atr, 2), round(entry * 0.93, 2))  # ≤7% stop
-            target = round(entry + 2.0 * (entry - stop), 2)
+            tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+            stop, target, meets_min_move = self._stop_target_for_costs(entry, atr, tier)
+            if not meets_min_move:
+                return None
             return {
                 "symbol": symbol, "entry": entry, "stop": stop, "target": target,
                 "exit": None, "pnl_pct": None, "outcome": "OPEN",
@@ -423,7 +455,7 @@ class AlwaysOnTrader:
         else:  # already closed (historical sim) → straight to history
             history = self._load_history()
             history.append(trade)
-            self._write_json(FORCED_HISTORY_FILE, history[-200:])
+            self._write_json(FORCED_HISTORY_FILE, history[-HISTORY_RETENTION:])
 
     @staticmethod
     def _read_json(path: Path, default):

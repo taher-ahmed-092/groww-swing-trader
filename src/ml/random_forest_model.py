@@ -4,46 +4,67 @@ Activates when 50+ simulation data points exist (not 30 real trades) — the
 real pipeline has 0 trades so far, but the forced-learning engine already has
 hundreds. More interpretable than XGBoost: we can see which features matter.
 
-Features: RSI, ADX value, trend (encoded), OBV, supertrend, CMF, 52W position,
-score, tier (encoded). Target: WIN (1) or LOSS (0).
+Features: RSI, ADX value, CMF, volume ratio, ATR%, trend (encoded), OBV,
+supertrend, tier (encoded), RSI momentum zone. Deliberately excludes the
+rule-based signal score — see _extract_features' docstring for why.
+Target: WIN (1) or LOSS (0).
 """
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 MODEL_FILE = Path("data/models/random_forest.json")
 FEATURE_IMPORTANCE_FILE = Path("data/cache/rf_feature_importance.json")
 MIN_SAMPLES = 50
 
 FEATURES = [
-    "rsi", "adx_value", "cmf", "score",
+    "rsi", "adx_value", "cmf",
+    "vol_ratio", "atr_pct",          # independent of the rule-based score
     "trend_up", "trend_down",       # one-hot
     "adx_trending", "adx_choppy",   # one-hot
     "tier_large", "tier_mid",       # one-hot
     "obv_rising",                    # binary
     "supertrend_bull",               # binary
     "above_vwap",                    # binary
+    "rsi_zone",                      # binary: 50<=rsi<=65 momentum zone
 ]
 
 
 class RandomForestModel:
     def _extract_features(self, record: dict) -> list | None:
-        """Extracts feature vector from a trade record or indicator dict."""
+        """Extracts feature vector from a trade record or indicator dict.
+
+        Deliberately excludes the rule-based `score`/`signal_score` field — an
+        earlier version included it and it ended up with 84% of the trained
+        model's feature importance (audit finding), meaning the "independent"
+        ML opinion was mostly just re-reading a number the rule-based scorer
+        already computed. Features here are raw indicators only.
+        """
         try:
             ind = record.get("indicators_snapshot", record.get("indicators", {})) or {}
             rsi = ind.get("rsi_at_entry", ind.get("rsi_14", 50)) or 50
+            adx_value = ind.get("adx_14", 0) or 0
             adx_sig = ind.get("adx_at_entry", ind.get("adx_signal", "NEUTRAL")) or "NEUTRAL"
             trend = ind.get("trend_at_entry", ind.get("trend", "SIDEWAYS")) or "SIDEWAYS"
-            score = record.get("signal_score", record.get("score", 0.5)) or 0.5
             cmf = ind.get("cmf_20", 0) or 0
             tier = record.get("tier", "large") or "large"
             obv = ind.get("obv_trend", "NEUTRAL") == "RISING"
             st = ind.get("supertrend_direction", "NEUTRAL") == "BULLISH"
             vwap = ind.get("price_vs_vwap", "NEUTRAL") == "ABOVE"
 
+            vol_ratio = ind.get("volume_ratio", 1.0) or 1.0
+            atr = ind.get("atr_14", 0) or 0
+            entry = record.get("entry", record.get("entry_price", 100)) or 100
+            atr_pct = (atr / entry * 100) if entry else 0.0
+            rsi_zone = 1.0 if 50 <= rsi <= 65 else 0.0
+
             return [
-                float(rsi), 0.0, float(cmf), float(score),
+                float(rsi), float(adx_value), float(cmf),
+                float(vol_ratio), float(atr_pct),
                 1.0 if trend == "UPTREND" else 0.0,
                 1.0 if trend == "DOWNTREND" else 0.0,
                 1.0 if adx_sig == "TRENDING" else 0.0,
@@ -53,6 +74,7 @@ class RandomForestModel:
                 1.0 if obv else 0.0,
                 1.0 if st else 0.0,
                 1.0 if vwap else 0.0,
+                rsi_zone,
             ]
         except Exception:
             return None
@@ -111,7 +133,20 @@ class RandomForestModel:
         val_acc = model.score(X_val, y_val) if len(y_val) else 0.0
 
         if val_acc < 0.52:
+            log.warning(
+                "RF model accuracy insufficient without the score crutch "
+                "(%.0f%% < 52%%) — disabling rather than deploying noise as signal.",
+                val_acc * 100)
+            # Actively disable — remove any previously-deployed model so
+            # predict_win_probability() returns None instead of serving stale
+            # predictions from before this feature change.
+            for stale in (MODEL_FILE, FEATURE_IMPORTANCE_FILE):
+                try:
+                    stale.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return {"trained": False, "n_samples": len(X), "val_accuracy": round(val_acc, 3),
+                    "reason": "insufficient_signal_without_crutch",
                     "message": f"Val accuracy {val_acc:.0%} < 52% — avoiding overfit"}
 
         importances = dict(zip(FEATURES, model.feature_importances_.tolist()))

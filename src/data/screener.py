@@ -112,6 +112,10 @@ class ScreenerScraper:
             data["name"] = h1.get_text(strip=True)
 
         # Top ratios list: <li><span class="name">..</span><span class="value">..</span></li>
+        # NOTE: "debt to equity" never matched live screener.in markup (audit
+        # finding — D/E came back None for every stock tested, including large
+        # caps with well-known D/E figures). screener.in's own label wording has
+        # drifted across companies/redesigns, so match on multiple variants.
         label_map = {
             "market cap": "market_cap_cr",
             "stock p/e": "pe_ratio",
@@ -121,6 +125,9 @@ class ScreenerScraper:
             "roce": "roce_pct",
             "roe": "roe_pct",
             "debt to equity": "debt_to_equity",
+            "debt / equity": "debt_to_equity",
+            "d/e ratio": "debt_to_equity",
+            "debt-to-equity": "debt_to_equity",
             "current ratio": "current_ratio",
         }
         current_price = None

@@ -142,6 +142,23 @@ class RiskChecker:
         if not is_pairs and fund_score < fund_min:
             reasons.append(f"fundamental score {fund_score:.2f} < min {fund_min:.2f}{demo_tag}")
 
+        # 2b. Net R:R after real transaction costs (audit finding: gross +0.24%/trade
+        # expectancy was net -0.21%/trade once STT/slippage/GST applied — a target
+        # that looks like 2:1 gross can be under 1:1 net). Skipped for pairs: their
+        # target/stop already reflect spread economics, scored separately by the judge.
+        if not is_pairs and (entry_price := technical.get("entry_price")):
+            stop_for_rr = technical.get("stop_price")
+            target_for_rr = technical.get("target_price")
+            if stop_for_rr and target_for_rr and (entry_price - stop_for_rr) > 0:
+                from src.trading.cost_model import compute_round_trip_costs
+
+                rr_costs = compute_round_trip_costs(entry_price, target_for_rr, 1, tier)
+                net_target_move_pct = (target_for_rr - entry_price) / entry_price * 100 - rr_costs.total_pct
+                net_stop_move_pct = abs((stop_for_rr - entry_price) / entry_price * 100)
+                net_rr = net_target_move_pct / net_stop_move_pct if net_stop_move_pct else 0
+                if net_rr < 1.5:
+                    reasons.append(f"Net R:R {net_rr:.1f}:1 after costs — below 1.5:1 minimum")
+
         # 3. Stop must exist — no exceptions.
         stop_price = technical.get("stop_price")
         if not stop_price:

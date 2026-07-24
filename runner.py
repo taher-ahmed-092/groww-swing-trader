@@ -518,6 +518,15 @@ def _run_guarantee(label: str, target: int) -> None:
     console.print(f"[cyan][JOB] {label}: {len(taken)} guarantee action(s)[/cyan]")
 
 
+def intraday_scan_job() -> None:
+    """Mon-Fri every 30 min, 9:00 AM-2:30 PM IST — the #1 audit priority: get the
+    first real pipeline trade (judge + risk + stop, not a forced simulation).
+    Reuses DailyTradeGuarantee (pairs-first, then oversold mean-reversion) rather
+    than duplicating pipeline code — this just calls it far more often than the
+    existing 3x/day guarantee jobs so a qualifying setup is caught sooner."""
+    _run_guarantee("intraday_scan", target=999)
+
+
 def midmorning_guarantee_job() -> None:
     """Mon-Fri 10:30 AM — ensure at least 1 paper trade today (MIN)."""
     _run_guarantee("midmorning_guarantee", target=1)
@@ -767,6 +776,7 @@ if __name__ == "__main__":
     scheduler.add_job(sunday_morning_batch_check, "cron", day_of_week="sun", hour=7, minute=0)
     scheduler.add_job(intraday_entry_job, "cron", day_of_week="mon-fri", hour=9, minute=30)
     scheduler.add_job(intraday_exit_job, "cron", day_of_week="mon-fri", hour=15, minute=15)
+    scheduler.add_job(intraday_scan_job, "cron", day_of_week="mon-fri", hour="9-14", minute="*/30")
     scheduler.add_job(midmorning_guarantee_job, "cron", day_of_week="mon-fri", hour=10, minute=30)
     scheduler.add_job(midday_guarantee_job, "cron", day_of_week="mon-fri", hour=12, minute=30)
     scheduler.add_job(afternoon_guarantee_job, "cron", day_of_week="mon-fri", hour=14, minute=0)

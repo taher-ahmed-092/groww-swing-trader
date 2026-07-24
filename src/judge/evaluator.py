@@ -32,7 +32,7 @@ _VALID_FLAGS = {
     "PROMOTER_PLEDGE_RISK", "EARNINGS_PROXIMITY", "FIGHTING_NIFTY",
     "HARD_REJECTED_FUNDAMENTAL", "TECHNICAL_SKIP",
     "SUPERTREND_BEARISH", "SELLING_PRESSURE", "BELOW_ALL_SUPPORTS",
-    "ML_JUDGE_DISAGREEMENT", "COSTS_EAT_EDGE",
+    "ML_JUDGE_DISAGREEMENT", "COSTS_EAT_EDGE", "COSTS_MINIMUM_NOT_MET",
 }
 
 APPROVAL_THRESHOLD = 7.5  # out of 10
@@ -144,6 +144,7 @@ class LLMJudge:
 
         # Costs veto — a trade whose expected move can't clear 3x round-trip costs
         # is a fiction of an edge once STT/brokerage/GST/slippage are applied.
+        net_move_after_costs = None
         if entry and target:
             try:
                 from src.data.watchlist import ALL_STOCKS
@@ -153,6 +154,7 @@ class LLMJudge:
                 tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
                 expected_move_pct = (target - entry) / entry * 100
                 est_cost_pct = compute_round_trip_costs(entry, target, 1, tier).total_pct
+                net_move_after_costs = expected_move_pct - est_cost_pct
                 if expected_move_pct < est_cost_pct * 3:
                     veto.append("COSTS_EAT_EDGE")
                     console.print(
@@ -160,6 +162,13 @@ class LLMJudge:
                         f"3x costs {est_cost_pct * 3:.2f}%[/red]")
             except Exception:
                 pass
+
+        # Softer cost-margin signal, surfaced (not hard-vetoed) so the risk
+        # checker's net R:R check sees it too — a trade can clear the 3x
+        # COSTS_EAT_EDGE bar above yet still net under 1% after costs.
+        cost_margin_flags = (["COSTS_MINIMUM_NOT_MET"]
+                             if net_move_after_costs is not None and net_move_after_costs < 1.0
+                             else [])
 
         if veto:
             if manually_requested:
@@ -200,7 +209,7 @@ class LLMJudge:
             fund = fundamental.get("score", 0) or 0
             tech = technical.get("score", 0) or 0
             overall = round((fund * 0.5 + tech * 0.5) * 10, 2)
-            flags = ["DEMO_MODE"]
+            flags = ["DEMO_MODE"] + cost_margin_flags
             if manually_requested:
                 flags.append("MANUALLY_REQUESTED")
             return {
@@ -285,6 +294,9 @@ class LLMJudge:
 
         overall = float(verdict.get("overall_score", 0) or 0)
         flags = [f for f in verdict.get("flags", []) if f in _VALID_FLAGS]
+        for f in cost_margin_flags:
+            if f not in flags:
+                flags.append(f)
         if manually_requested and "MANUALLY_REQUESTED" not in flags:
             flags.append("MANUALLY_REQUESTED")
 
