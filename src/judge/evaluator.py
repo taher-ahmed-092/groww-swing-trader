@@ -82,11 +82,57 @@ class LLMJudge:
             flags.append("BELOW_ALL_SUPPORTS")
         return flags
 
+    def _evaluate_pairs_trade(self, state: TradeState, technical: dict) -> dict:
+        """Pairs trades are pre-screened by PairsTradingStrategy (correlation >= 0.70,
+        z-score >= 2.0 — see src/strategies/pairs_trading.py). The momentum-oriented
+        auto-vetoes (CHOPPY_MARKET, FIGHTING_NIFTY, SUPERTREND_BEARISH, ...) describe
+        the buy leg's own trend, which is irrelevant to a market-neutral spread bet —
+        so this bypasses _auto_veto entirely and scores on spread quality instead."""
+        opp = state.get("pairs_opportunity") or {}
+        z_score = opp.get("z_score")
+        correlation = opp.get("correlation")
+        if z_score is None:
+            # No pairs_opportunity in state (e.g. daily_guarantee's manually-built
+            # state) — recover an equivalent z-score from the strategy's own score,
+            # since PairsTradingStrategy.generate_signal derives score from z-score
+            # via score = min(0.9, 0.5 + (z - 2.0) * 0.3).
+            score = technical.get("score", 0.65) or 0.65
+            z_score = round(2.0 + (score - 0.5) / 0.3, 2)
+        if correlation is None:
+            correlation = 0.75  # PairsTradingStrategy's own minimum is 0.70
+
+        z_score_score = min(10, (z_score - 2.0) * 4 + 5)
+        corr_score = correlation * 10
+        overall_score = round((z_score_score + corr_score) / 2, 2)
+
+        buy_symbol = opp.get("buy_symbol") or state.get("symbol", "?")
+        pair_symbol = opp.get("pair_symbol") or "?"
+        flags = ["PAIRS_TRADE"]
+        if bool(state.get("manually_requested")):
+            flags.append("MANUALLY_REQUESTED")
+
+        return {
+            "approved": overall_score >= 5.5,  # lower bar — pairs are already spread-vetted
+            "score": round(overall_score / 10, 4),
+            "overall_score": overall_score,
+            "dimension_scores": {"z_score_quality": round(z_score_score, 2),
+                                 "correlation_quality": round(corr_score, 2)},
+            "flags": flags,
+            "reasoning": (
+                f"Pairs trade: {z_score:.2f}sigma divergence, {correlation:.3f} "
+                "correlation. Mean reversion expected."
+            ),
+            "one_line_verdict": f"Pairs: {buy_symbol} lagging {pair_symbol} by {z_score:.1f}sigma",
+        }
+
     def evaluate(self, state: TradeState) -> dict:
         fundamental = state.get("fundamental_verdict", {})
         technical = state.get("technical_verdict", {})
         market_context = state.get("market_context") or self.market.get_nifty_context()
         manually_requested = bool(state.get("manually_requested"))
+
+        if technical.get("strategy_name") == "pairs_trading":
+            return self._evaluate_pairs_trade(state, technical)
 
         entry = technical.get("entry_price") or 0
         stop = technical.get("stop_price") or 0

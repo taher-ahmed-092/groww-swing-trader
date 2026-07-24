@@ -252,7 +252,14 @@ def _make_router(next_node: str):
     return router
 
 
-def build_graph() -> StateGraph:
+def build_graph():
+    """Build and compile the full pipeline graph.
+
+    Returns a compiled graph (invoke()/stream()-able directly), not a bare
+    StateGraph — every caller immediately compiled it anyway, so the two-step
+    build_graph()+.compile() dance was pure duplication with two copies of the
+    interrupt_before logic to keep in sync.
+    """
     graph = StateGraph(TradeState)
 
     graph.add_node("market_context_node", market_context_node)
@@ -287,24 +294,21 @@ def build_graph() -> StateGraph:
         graph.add_conditional_edges(current, _make_router(nxt), {nxt: nxt, END: END})
 
     graph.add_edge("analytics_node", END)
-    return graph
 
-
-def compile_app():
     # In-memory checkpointer — no native deps (the SQLite checkpointer pulled in
     # sqlite-vec, which has no Android/Termux wheel). State persists for the process
     # lifetime, which is all the one-shot graph invocations need; the durable record
     # of every trade lives in the journal DB (data/journal/trades.db), not here.
-    checkpointer = MemorySaver()
-
-    graph = build_graph()
-
-    compile_kwargs: dict = {"checkpointer": checkpointer}
+    compile_kwargs: dict = {"checkpointer": MemorySaver()}
     # Human-in-the-loop: pause before live execution so a human can review.
     if settings.live_trading_enabled:
         compile_kwargs["interrupt_before"] = ["executor_node"]
 
     return graph.compile(**compile_kwargs)
+
+
+def compile_app():
+    return build_graph()
 
 
 app = compile_app()

@@ -125,6 +125,36 @@ class TechnicalAgent:
         provisional = {"signal": "BUY", "indicators": indicators}
         time_window = TradingTimeWindow().compute_entry_window(provisional, state)
 
+        # Pairs trades are market-neutral: the buy_symbol's own RSI/ADX/pivots/
+        # supertrend describe its individual momentum, not the spread that's
+        # actually being traded (spread divergence, already verified by
+        # PairsTradingStrategy at 2.0+ sigma). Return here, before any of that
+        # gets folded into flags/score — a CHOPPY_MARKET or BELOW_ALL_SUPPORTS
+        # flag on the buy leg says nothing about whether the pair reverts.
+        if strategy_name == "pairs_trading" and strat_signal.get("signal") == "BUY":
+            return {
+                "score": strat_signal["score"],
+                "signal": "BUY",
+                "entry_price": entry_price,
+                "stop_price": stop_price,
+                "target_price": target_price,
+                "patterns": [],
+                "proceed": True,
+                "strategy_name": "pairs_trading",
+                "weekly_trend": weekly_trend,
+                "entry_recommendation": entry_recommendation,
+                "time_window": time_window,
+                "circuit_breaker": circuit,
+                "flags": [],
+                "indicators": {"rsi_14": indicators.get("rsi_14"), "trend": "SIDEWAYS"},
+                "reasoning": (
+                    f"Pairs trade — {strat_signal.get('rationale', '')}. "
+                    "Individual-stock momentum checks (RSI/ADX/pivots/supertrend) "
+                    "are intentionally skipped: this is a market-neutral spread "
+                    "position, not a directional bet on this stock alone."
+                ),
+            }
+
         base = {
             "entry_price": entry_price,
             "stop_price": stop_price,

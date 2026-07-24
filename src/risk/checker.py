@@ -117,6 +117,13 @@ class RiskChecker:
         # 2. Confidence floor on both legs.
         # 0.80 is the bar for real-money decisions; demo/testing uses 0.60 so the
         # execution path can actually be exercised with rule-based scores.
+        # Skipped for pairs trades: technical.score there is the spread's z-score
+        # confidence (not this stock's momentum quality), and fundamental.score
+        # reflects only one leg of a market-neutral position — neither is what's
+        # actually being bet on. PairsTradingStrategy already gates entry at
+        # correlation >= 0.70 and z-score >= 2.0; the judge re-scores that spread
+        # quality directly (see LLMJudge._evaluate_pairs_trade).
+        is_pairs = technical.get("strategy_name") == "pairs_trading"
         min_conf = LIMITS.min_confidence
         demo = settings.effective_demo_mode
         if demo:
@@ -130,9 +137,9 @@ class RiskChecker:
         if demo and fundamental.get("data_missing"):
             fund_min = 0.45
             demo_tag = " (demo, data-missing)"
-        if tech_score < min_conf:
+        if not is_pairs and tech_score < min_conf:
             reasons.append(f"technical score {tech_score:.2f} < min {min_conf:.2f}{demo_tag}")
-        if fund_score < fund_min:
+        if not is_pairs and fund_score < fund_min:
             reasons.append(f"fundamental score {fund_score:.2f} < min {fund_min:.2f}{demo_tag}")
 
         # 3. Stop must exist — no exceptions.

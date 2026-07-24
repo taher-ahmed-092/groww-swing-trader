@@ -41,6 +41,23 @@ class StrategyRegistry:
     def best_signal(self, symbol: str, df: pd.DataFrame, indicators: dict,
                     context: dict, regime: str) -> dict:
         ctx = {**(context or {}), "symbol": symbol}
+
+        # A caller that already found a specific pairs divergence for this exact
+        # symbol (PairsTradingStrategy.find_opportunities(), pre-screened at
+        # correlation >= 0.70 and z-score >= 2.0) has done more work than any
+        # regime win-rate ranking can capture. Without this, the ranked walk
+        # below can let e.g. mean_reversion fire BUY on the same symbol's own
+        # RSI first, silently discarding the pairs setup the caller asked for
+        # and reverting to individual-stock momentum criteria that don't apply
+        # to a market-neutral spread trade.
+        opp = ctx.get("pairs_opportunity")
+        if opp and opp.get("buy_symbol") == symbol:
+            pairs_strat = next(s for s in self.strategies if s.name == "pairs_trading")
+            signal = pairs_strat.generate_signal(df, indicators, ctx)
+            if signal.get("signal") == "BUY":
+                signal["strategy_name"] = pairs_strat.name
+                return signal
+
         for strat in self.get_strategies_for_regime(regime):
             signal = strat.generate_signal(df, indicators, ctx)
             if signal.get("signal") == "BUY":
