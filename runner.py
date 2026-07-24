@@ -758,7 +758,15 @@ def drift_check_job() -> None:
         if wr.get("detected"):
             parts.append(f"WR: {wr['message']}")
         if pat.get("detected"):
-            parts.append(f"{pat['drifted_count']} patterns drifting")
+            drifted = pat.get("drifted_count", 0)
+            example = (pat.get("patterns") or [{}])[0]
+            old_conf = example.get("old_confidence", 0)
+            loss_rate = example.get("recent_loss_rate", 0)
+            parts.append(
+                f"{drifted} patterns were {old_conf:.0%} confident but now "
+                f"failing {loss_rate:.0%} of the time. Confidence decayed — "
+                "system re-learning."
+            )
         if reg.get("detected"):
             parts.append(f"Regime: {reg['message']}")
         console.print(f"[yellow][JOB] Concept drift detected: {parts}[/yellow]")

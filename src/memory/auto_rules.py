@@ -37,6 +37,7 @@ class AutoRuleExtractor:
         """
         journal = TradingJournal()
         kb = journal.get_active_knowledge(min_confidence=0.0)
+        drifted_pattern_ids = self._load_drifted_pattern_ids()
 
         stock_vetoes: dict = {}
         stock_boosts: dict = {}
@@ -48,6 +49,8 @@ class AutoRuleExtractor:
                 continue
             if e.observed_count < self.MIN_OBSERVATIONS:
                 continue
+            if e.pattern_id in drifted_pattern_ids:
+                continue  # don't turn a currently-drifting pattern into a rule
 
             desc = e.pattern_description or ""
             is_loss = "LOST" in desc or "LOSS" in desc
@@ -112,6 +115,26 @@ class AutoRuleExtractor:
         AUTO_RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
         AUTO_RULES_FILE.write_text(json.dumps(rules, indent=2))
         return rules
+
+    @staticmethod
+    def _load_drifted_pattern_ids() -> set[str]:
+        """Pattern IDs flagged by DriftDetector in the last 10 logged drift
+        checks — a pattern currently failing consistently should not become an
+        auto-applied rule just because it also happens to clear the confidence/
+        observation bar (that bar is about volume of evidence, not recency)."""
+        drift_file = Path("data/cache/drift_history.json")
+        drifted_pattern_ids: set[str] = set()
+        if drift_file.exists():
+            try:
+                history = json.loads(drift_file.read_text())
+                for record in history[-10:]:
+                    for p in record.get("pattern_drift", {}).get("patterns", []):
+                        pid = p.get("pattern_id", "")
+                        if pid:
+                            drifted_pattern_ids.add(pid)
+            except Exception:
+                pass
+        return drifted_pattern_ids
 
     @staticmethod
     def load() -> dict:

@@ -140,6 +140,25 @@ class LessonsWriter:
         for i, rec in enumerate(recommendations, 1):
             lines.append(f"{i}. {rec}")
 
+        lines += ["", "## Recently Drifted Patterns (Do Not Trust)"]
+        drift_file = Path("data/cache/drift_history.json")
+        drifted: list = []
+        if drift_file.exists():
+            try:
+                history = json.loads(drift_file.read_text())
+                if history:
+                    drifted = history[-1].get("pattern_drift", {}).get("patterns", [])
+            except Exception:
+                pass
+        if drifted:
+            for p in drifted[:5]:
+                lines.append(
+                    f"- ⚠️ {p['pattern_id']}: was {p['old_confidence']:.0%} confident, "
+                    f"now {p['recent_loss_rate']:.0%} loss rate"
+                )
+        else:
+            lines.append("- No recently drifted patterns")
+
         lines += [
             "",
             "---",

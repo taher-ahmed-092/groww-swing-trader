@@ -428,6 +428,13 @@ class TradingJournal:
             session.refresh(entry)
         return entry
 
+    # Trading is never certain — 1.0 confidence is an overconfidence bug, not a
+    # feature (it caused 13 patterns to reach "absolute certainty" and then
+    # fail 71% of the time). Hard ceiling well below "certain"; floor keeps a
+    # pattern alive as a weak hypothesis rather than being fully forgotten.
+    MAX_CONFIDENCE = 0.90
+    MIN_CONFIDENCE = 0.02
+
     def update_knowledge_confidence(
         self, pattern_id: str, confirmed: Optional[bool] = None,
         force_confidence: Optional[float] = None,
@@ -436,7 +443,9 @@ class TradingJournal:
         force_confidence: set confidence to an exact value instead — used by
         DriftDetector to decay all pattern confidences by a fixed factor when
         concept drift is detected. Pass confirmed=None with force_confidence
-        set for a neutral decay (no observed_count/last_confirmed bump)."""
+        set for a neutral decay (no observed_count/last_confirmed bump).
+        Every path is clamped to [MIN_CONFIDENCE, MAX_CONFIDENCE] — no pattern
+        can ever reach "absolute certainty" or be fully zeroed out."""
         with Session(self.engine) as session:
             entry = session.exec(
                 select(KnowledgeEntry).where(KnowledgeEntry.pattern_id == pattern_id)
@@ -444,14 +453,16 @@ class TradingJournal:
             if entry is None:
                 return None
             if force_confidence is not None:
-                entry.confidence = round(force_confidence, 4)
+                new_confidence = force_confidence
                 entry.observed_count += 1  # count as an update
             elif confirmed:
-                entry.confidence = min(1.0, round(entry.confidence + 0.1, 4))
+                new_confidence = entry.confidence + 0.1
                 entry.observed_count += 1
                 entry.last_confirmed = _now()
             else:
-                entry.confidence = max(0.0, round(entry.confidence - 0.05, 4))
+                new_confidence = entry.confidence - 0.05
+            entry.confidence = round(
+                max(self.MIN_CONFIDENCE, min(self.MAX_CONFIDENCE, new_confidence)), 4)
             entry.is_hypothesis = entry.observed_count < HYPOTHESIS_MAX_COUNT
             session.add(entry)
             session.commit()

@@ -145,7 +145,7 @@ class ContinuousSimulator:
         if entry <= 0:
             return None
 
-        signal = self._evaluate_signal(indicators, tier)
+        signal = self._evaluate_signal(indicators, tier, entry)
         if signal["action"] == "SKIP":
             return None
 
@@ -170,12 +170,23 @@ class ContinuousSimulator:
             "regime": regime, "signal_score": signal["score"],
             "rsi": indicators.get("rsi_14", 50), "trend": indicators.get("trend", "SIDEWAYS"),
             "adx": indicators.get("adx_signal", "NEUTRAL"),
+            "strategy_type": signal.get("strategy_type", "momentum"),
             "simulated_at": datetime.now(IST).isoformat(), "source": "continuous_sim",
             "pattern_added": pattern_added,
         }
 
-    def _evaluate_signal(self, ind: dict, tier: str) -> dict:
-        """Fast rule-based signal — no LLM needed, pure math over indicators."""
+    def _evaluate_signal(self, ind: dict, tier: str, entry: float) -> dict:
+        """Fast rule-based signal — no LLM needed, pure math over indicators.
+
+        Distinguishes two signal types so the knowledge base can build
+        separate patterns for each: momentum (uptrend + volume confirmation)
+        and mean reversion (deeply oversold, but still above the long-term
+        trend). Audit finding: DOWNTREND wins in this system's history came
+        from oversold bounces, not momentum continuation — a plain
+        `rsi < 35` boost regardless of the long-term trend would just as
+        happily fire on a stock in genuine structural decline, so it's gated
+        on price still being above MA200 (unknown MA200 = insufficient
+        history = don't grant the extra boost, stay conservative)."""
         rsi = ind.get("rsi_14", 50) or 50
         trend = ind.get("trend", "SIDEWAYS") or "SIDEWAYS"
         adx = ind.get("adx_signal", "NEUTRAL") or "NEUTRAL"
@@ -183,10 +194,15 @@ class ContinuousSimulator:
         supertrend = ind.get("supertrend_direction", "NEUTRAL") or "NEUTRAL"
 
         score = 0.0
+        strategy_type = "momentum"
         if 48 <= rsi <= 68:
             score += 0.30
         elif rsi < 35:
-            score += 0.15
+            score += 0.15  # baseline oversold bounce potential
+            ma200 = ind.get("ma_200")
+            if ma200 is not None and entry > ma200:
+                score += 0.25  # deeply oversold but still above the long-term trend
+                strategy_type = "mean_reversion"
         elif rsi > 72:
             score -= 0.25
         if trend == "UPTREND":
@@ -205,7 +221,7 @@ class ContinuousSimulator:
         thresholds = {"large": 0.30, "mid": 0.35, "small": 0.40}
         threshold = thresholds.get(tier, 0.35)
         action = "BUY" if score >= threshold else "SKIP"
-        return {"action": action, "score": round(score, 3)}
+        return {"action": action, "score": round(score, 3), "strategy_type": strategy_type}
 
     @staticmethod
     def _check_outcome(entry: float, stop: float, target: float,

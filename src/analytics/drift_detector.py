@@ -26,6 +26,12 @@ from src.memory.journal import TradingJournal
 
 DRIFT_HISTORY_FILE = Path("data/cache/drift_history.json")
 
+# A drop computed from too few trades (or a "71% loss rate" that's really
+# 5-of-7) is noise dressed up as a finding — these floors gate every drift
+# check on genuinely sufficient evidence before declaring drift.
+MIN_TRADES_PER_WINDOW = 20   # each of the two 30-trade windows needs this many
+MIN_RECENT_MATCHES = 10      # pattern-drift sample floor (was 3 — too small)
+
 
 class DriftDetector:
     def __init__(self) -> None:
@@ -70,8 +76,17 @@ class DriftDetector:
         recent = all_trades[-30:]
         previous = all_trades[-60:-30]
 
-        recent_wr = sum(1 for t in recent if t.get("outcome") == "WIN") / 30
-        prev_wr = sum(1 for t in previous if t.get("outcome") == "WIN") / 30
+        if len(recent) < MIN_TRADES_PER_WINDOW:
+            return {"detected": False,
+                    "reason": f"Insufficient data: only {len(recent)} trades in "
+                              f"recent window (need {MIN_TRADES_PER_WINDOW})"}
+        if len(previous) < MIN_TRADES_PER_WINDOW:
+            return {"detected": False,
+                    "reason": f"Insufficient data: only {len(previous)} trades in "
+                              f"previous window (need {MIN_TRADES_PER_WINDOW})"}
+
+        recent_wr = sum(1 for t in recent if t.get("outcome") == "WIN") / len(recent)
+        prev_wr = sum(1 for t in previous if t.get("outcome") == "WIN") / len(previous)
         drift = recent_wr < prev_wr - 0.15
 
         return {
@@ -102,8 +117,8 @@ class DriftDetector:
                 if entry.observed_in_regime in (t.get("regime", ""), t.get("trend", ""))
                 and abs((t.get("rsi") or 50) - 52) < 10
             ]
-            if len(matching_recent) < 3:
-                continue
+            if len(matching_recent) < MIN_RECENT_MATCHES:
+                continue  # e.g. 5-of-7 = 71% "loss rate" is noise, not evidence
 
             recent_losses = sum(1 for t in matching_recent if t.get("outcome") == "LOSS")
             if recent_losses >= 3 and (recent_losses / len(matching_recent) > 0.70):

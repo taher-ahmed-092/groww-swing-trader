@@ -44,6 +44,13 @@ class HistoricalReplayEngine:
     def __init__(self) -> None:
         self.journal = TradingJournal()
         self.fetcher = MarketDataFetcher()
+        # Session-scoped dedup: pattern_id is derived from tier/trend/RSI-bucket/
+        # ADX-signal, NOT the specific stock — so replaying many days of the same
+        # stock (or several stocks sharing a regime bucket) in one run_batch()
+        # call could hit the identical pattern repeatedly and inflate its
+        # confidence well past what the evidence actually supports. One update
+        # per pattern per calendar day, per engine instance (= per batch run).
+        self._updated_today: set[str] = set()
 
     # ── batch driver ─────────────────────────────────────────────────────────
     def run_batch(self, n_stocks: int = 15, n_days_each: int = 5) -> dict:
@@ -208,6 +215,11 @@ class HistoricalReplayEngine:
         adx = indicators.get("adx_signal", "NEUTRAL") or "NEUTRAL"
         rsi_bucket = "high" if rsi > 60 else "mid" if rsi > 45 else "low"
         pattern_id = f"replay-{tier}-{trend.lower()}-rsi{rsi_bucket}-adx{adx.lower()}"
+
+        cache_key = f"{pattern_id}_{date.today()}"
+        if cache_key in self._updated_today:
+            return False  # already updated this pattern today — don't inflate it further
+        self._updated_today.add(cache_key)
 
         try:
             existing = [e for e in self.journal.get_active_knowledge(min_confidence=0.0)
