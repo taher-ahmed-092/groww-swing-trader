@@ -66,6 +66,16 @@ class ContinuousSimulator:
         )
         batch = by_last_sim[: self.BATCH_SIZE]
 
+        # Meta-learning throttle: pattern learning never stops (a "paused"
+        # engine still trickles a minimal number of windows), but the volume
+        # of new simulated trades an unprofitable engine generates is reduced.
+        from src.analytics.strategy_scorecard import EngineScorecard
+
+        mode = EngineScorecard.get_mode("CONTINUOUS_SIM")
+        windows_per_stock = (1 if mode == "paused"
+                            else max(1, self.DAYS_PER_STOCK // 2) if mode == "throttled"
+                            else self.DAYS_PER_STOCK)
+
         wins = losses = new_patterns = 0
         sim_records: list[dict] = []
 
@@ -76,7 +86,7 @@ class ContinuousSimulator:
                 if df is None or len(df) < 60:
                     continue
 
-                windows = self._pick_windows(len(df), self.DAYS_PER_STOCK)
+                windows = self._pick_windows(len(df), windows_per_stock)
                 for window_end in windows:
                     result = self._simulate_window(symbol, tier, df, window_end)
                     if result:
@@ -91,7 +101,7 @@ class ContinuousSimulator:
                 progress[symbol] = {
                     "last_sim": date.today().isoformat(),
                     "total_sims": (progress.get(symbol, {}).get("total_sims", 0)
-                                  + self.DAYS_PER_STOCK),
+                                  + len(windows)),
                 }
                 time.sleep(0.3)  # respectful to yfinance
             except Exception as exc:

@@ -16,6 +16,12 @@ IST = ZoneInfo("Asia/Kolkata")
 def _tmp_files(tmp_path, monkeypatch):
     monkeypatch.setattr(aot, "FORCED_TRADE_FILE", tmp_path / "open.json")
     monkeypatch.setattr(aot, "FORCED_HISTORY_FILE", tmp_path / "hist.json")
+    # Isolate from real data/cache/engine_throttle.json — these tests exercise
+    # daily-count/cap logic, not the meta-learning throttle, which reads real
+    # repo state by design (so it works across process restarts).
+    from src.analytics.strategy_scorecard import EngineScorecard
+
+    monkeypatch.setattr(EngineScorecard, "get_mode", staticmethod(lambda engine: "normal"))
 
 
 def _today_iso() -> str:

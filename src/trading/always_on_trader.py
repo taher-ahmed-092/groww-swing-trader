@@ -50,7 +50,15 @@ HISTORY_RETENTION = 3000
 
 class AlwaysOnTrader:
     TARGET_DAILY_TRADES = 999  # effectively unlimited
-    MAX_DAILY_TRADES = 999     # no upper limit — more trades = faster learning
+    # Audit finding: 273 forced trades in one day was churn, not learning —
+    # and combined with a 90-min exit vs 6%+ targets, it inverted the realized
+    # R:R (winners = small time-exits, losers = full stops + costs, PF 0.53).
+    # Multi-day holds (see close_open_forced_trades) need volume capped so a
+    # position actually gets time to reach its target instead of being one of
+    # hundreds churned through in a single session.
+    MAX_DAILY_TRADES = 30      # quality over churn
+    MAX_OPEN_FORCED = 15       # concurrent open forced positions
+    MAX_HOLD_DAYS = 5          # multi-day hold, not 90 minutes
 
     def __init__(self) -> None:
         self.journal = TradingJournal()
@@ -67,11 +75,26 @@ class AlwaysOnTrader:
         placed_today = self._count_todays_forced_trades()
         if placed_today >= self.MAX_DAILY_TRADES:
             return []
-        # Always place more — no upper limit in practice. Just cap per-call volume
-        # to avoid rate limits; this gets called every 15 min throughout the day.
-        needed = 5
+        if len(self._load_open_forced_trades()) >= self.MAX_OPEN_FORCED:
+            return []  # let existing positions actually play out before opening more
 
         is_market_hours = self._is_market_hours(datetime.now(IST))
+
+        # Meta-learning: an engine that's been consistently unprofitable over
+        # real evidence gets its own entries throttled or paused — the system
+        # adjusting its own behavior, not just pattern confidences.
+        from src.analytics.strategy_scorecard import EngineScorecard
+
+        engine_name = "LIVE_FORCED" if is_market_hours else "HISTORICAL_SIM"
+        engine_mode = EngineScorecard.get_mode(engine_name)
+        if engine_mode == "paused":
+            return []
+        # Cap per-call volume to avoid rate limits; this gets called every 15 min
+        # throughout the day.
+        needed = 5
+        if engine_mode == "throttled":
+            needed = max(1, needed // 2)
+
         regime_name = self._current_regime()
         trades: list[dict] = []
         for _ in range(needed):
@@ -90,28 +113,44 @@ class AlwaysOnTrader:
         return trades
 
     def close_open_forced_trades(self) -> list[dict]:
-        """Close forced trades opened 90+ min ago, or any still open at/after 15:20 IST.
-        90 min (not 15) gives swing indicators realistic time to resolve — a 15-min
-        hold was closer to noise than signal."""
+        """Multi-day positions: close on stop/target hit (checked every call,
+        any day) or after MAX_HOLD_DAYS days, whichever comes first. The old
+        90-minute exit was the root cause of an inverted realized R:R (audit
+        finding: PF 0.53 despite 40% WR) — winners were small 90-min time-exits
+        while losers ran the full stop distance plus costs, against 6%+
+        targets that a 90-minute window could rarely reach. Positions persist
+        across days in FORCED_TRADE_FILE; datetime.fromisoformat() on the
+        stored IST-aware ISO string parses correctly across day boundaries."""
         open_trades = self._load_open_forced_trades()
         if not open_trades:
             return []
 
         now = datetime.now(IST)
-        market_closing = now.replace(hour=15, minute=20, second=0, microsecond=0)
         closed, still_open = [], []
         for trade in open_trades:
             try:
                 opened_at = datetime.fromisoformat(trade["opened_at"])
-                elapsed_min = (now - opened_at).total_seconds() / 60
+                elapsed_days = (now.date() - opened_at.date()).days
             except Exception:
-                elapsed_min = 999
-            if elapsed_min >= 90 or now >= market_closing:
-                result = self._close_forced_trade(trade)
-                if result:
-                    closed.append(result)
-                    self._update_knowledge_from_trade(result)
-                    self._log_simulation_row(result)
+                elapsed_days = self.MAX_HOLD_DAYS  # malformed timestamp — force a close
+
+            current = self._current_price(trade["symbol"])
+            if current is None:
+                still_open.append(trade)  # can't price it — leave open, try again next call
+                continue
+
+            hit_stop = current <= trade["stop"]
+            hit_target = current >= trade["target"]
+            time_exit = elapsed_days >= self.MAX_HOLD_DAYS
+            if not (hit_stop or hit_target or time_exit):
+                still_open.append(trade)
+                continue
+
+            result = self._close_forced_trade(trade, current=current)
+            if result:
+                closed.append(result)
+                self._update_knowledge_from_trade(result)
+                self._log_simulation_row(result)
             else:
                 still_open.append(trade)
 
@@ -306,13 +345,18 @@ class AlwaysOnTrader:
         except Exception:
             return None
 
-    def _close_forced_trade(self, trade: dict) -> Optional[dict]:
+    def _current_price(self, symbol: str) -> Optional[float]:
+        current = self.fetcher.get_current_price(symbol)
+        if current is None:
+            df = self.fetcher.get_price_history(symbol, period="5d")
+            current = float(df["Close"].iloc[-1]) if (df is not None and len(df)) else None
+        return current
+
+    def _close_forced_trade(self, trade: dict, current: Optional[float] = None) -> Optional[dict]:
         symbol = trade["symbol"]
         try:
-            current = self.fetcher.get_current_price(symbol)
             if current is None:
-                df = self.fetcher.get_price_history(symbol, period="5d")
-                current = float(df["Close"].iloc[-1]) if (df is not None and len(df)) else None
+                current = self._current_price(symbol)
             if current is None:
                 return None
             entry, stop, target = trade["entry"], trade["stop"], trade["target"]

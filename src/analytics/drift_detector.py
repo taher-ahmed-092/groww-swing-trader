@@ -171,12 +171,20 @@ class DriftDetector:
         """Decays all knowledge-base pattern confidences by 20% (floor 0.05) —
         stale rules must re-earn confidence through fresh evidence once drift
         is detected, rather than continuing to dominate decisions unchanged."""
+        from src.analytics.strategy_scorecard import log_adaptation
+
         kb = self.journal.get_active_knowledge(min_confidence=0.0)
+        decayed = 0
         for entry in kb:
             if entry.confidence > 0.10:
                 new_conf = max(0.05, entry.confidence * 0.80)
                 self.journal.update_knowledge_confidence(
                     entry.pattern_id, confirmed=None, force_confidence=new_conf)
+                decayed += 1
+        if decayed:
+            log_adaptation(
+                "drift", f"Confidence decay applied to {decayed} patterns (x0.80, floor 0.05)",
+                f"{len(kb)} active patterns at decay time")
 
     # ── data + logging ──────────────────────────────────────────────────────
     def _load_all_sims(self) -> list:

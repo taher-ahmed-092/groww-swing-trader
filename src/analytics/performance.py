@@ -204,10 +204,27 @@ class PerformanceAnalyzer:
         # would silently break JSON.parse() on the dashboard's WebSocket payload.
         profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else 999.99
 
-        # Max drawdown on cumulative equity curve.
+        # Max drawdown on an R-multiple equity curve, NOT raw pnl_pct summed.
+        # Bug found live: summing pnl_pct (a per-trade % return on price) across
+        # hundreds of trades as if it were an equity balance produced "581.5%"
+        # drawdown — a meaningless number. An R-multiple curve normalizes each
+        # trade to "how many multiples of its own risk did it make/lose," which
+        # is what a real equity curve assuming constant 1%-of-capital risk per
+        # trade would track. Falls back to a 3.0% stop distance when entry/stop
+        # aren't available (some sim sources don't carry them).
+        def _r_multiple(t: dict) -> float:
+            entry, stop, pnl = t.get("entry"), t.get("stop"), t.get("pnl", 0)
+            if entry and stop and entry > 0:
+                stop_distance_pct = abs(entry - stop) / entry * 100
+            else:
+                stop_distance_pct = 0
+            if not stop_distance_pct:
+                stop_distance_pct = 3.0
+            return pnl / stop_distance_pct
+
         equity = peak = max_dd = 0.0
-        for p in pnls:
-            equity += p
+        for t in trades:
+            equity += _r_multiple(t)
             peak = max(peak, equity)
             max_dd = max(max_dd, peak - equity)
 
@@ -221,6 +238,7 @@ class PerformanceAnalyzer:
         return {
             "profit_factor": profit_factor,
             "max_drawdown_pct": round(max_dd, 2),
+            "max_drawdown_label": "Max DD (1% risk/trade)",
             "rolling_wr_recent20": round(recent_wr * 100, 1),
             "rolling_wr_prev20": round(prev_wr * 100, 1),
             "decay_alert": decay_alert,

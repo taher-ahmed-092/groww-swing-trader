@@ -353,6 +353,34 @@ def daily_learning_job() -> None:
     StockPriors().compute_and_save()
     console.print("[cyan][JOB] Stock priors recomputed[/cyan]")
 
+    _run_engine_scorecard()
+
+
+def _run_engine_scorecard() -> None:
+    """Meta-learning: throttle/pause/restore each learning engine based on
+    its own realized profit factor. Called from daily_learning_job (4:30 PM)
+    and nightly_engine_scorecard_job (11 PM)."""
+    from src.analytics.strategy_scorecard import EngineScorecard
+
+    changes = EngineScorecard().apply_throttles()
+    if changes:
+        lines = ["🧠 *Self-adjustment*"]
+        for engine, c in changes.items():
+            icon = {"paused": "⏸", "throttled": "🐢", "normal": "▶️"}.get(c["new"], "")
+            lines.append(f"{icon} {engine} {c['old']} -> {c['new']} ({c['reason']})")
+        console.print(f"[yellow][JOB] Engine scorecard changes: {changes}[/yellow]")
+        TelegramNotifier().send_message("\n".join(lines))
+    else:
+        console.print("[dim][JOB] Engine scorecard: no changes[/dim]")
+
+
+def nightly_engine_scorecard_job() -> None:
+    """11 PM IST — second daily scorecard pass (in addition to daily_learning_job's
+    4:30 PM run) so engine throttling reacts within the same trading day."""
+    if _kill_switch():
+        return
+    _run_engine_scorecard()
+
 
 def weekly_distillation_job() -> None:
     if _kill_switch():
@@ -869,6 +897,7 @@ if __name__ == "__main__":
     scheduler.add_job(continuous_sim_job, "cron", minute="*/30")
     scheduler.add_job(drift_check_job, "cron", hour="*/6")
     scheduler.add_job(triday_health_check_job, "cron", day="*/3", hour=20, minute=0)
+    scheduler.add_job(nightly_engine_scorecard_job, "cron", hour=23, minute=15)
     scheduler.start()
 
     # Telegram connectivity check — sends a hello message if configured.

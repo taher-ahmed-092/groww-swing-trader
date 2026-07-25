@@ -31,6 +31,26 @@ DEFAULT_THRESHOLDS = {
 
 MIN_EVIDENCE = 15  # need 15+ trades in a regime before adjusting
 
+# Live forced trades are real market-hours signal quality; simulations are
+# systematically more pessimistic (audit finding: live 53% vs sim 36% WR) —
+# so a regime's win rate is weighted by which engine produced the evidence,
+# not counted flat. intraday_sim_history.json trades map to "SHORT" (same
+# same-day-resolution character as a short-hold simulation).
+SOURCE_WEIGHTS = {
+    "LIVE_FORCED": 1.0,
+    "CONTINUOUS_SIM": 0.5,
+    "HISTORICAL_SIM": 0.3,
+    "SHORT": 0.4,
+}
+
+
+def _source_tag(fname: str, trade: dict) -> str:
+    if fname.endswith("continuous_sim_history.json"):
+        return "CONTINUOUS_SIM"
+    if fname.endswith("forced_trades_history.json"):
+        return "HISTORICAL_SIM" if trade.get("trade_type") == "HISTORICAL_SIM" else "LIVE_FORCED"
+    return "SHORT"  # intraday_sim_history.json / short_trades_history.json
+
 
 class AdaptiveThresholds:
     def load(self) -> dict:
@@ -56,39 +76,46 @@ class AdaptiveThresholds:
         thresholds based on evidence. Returns {regime: {old, new, evidence, win_rate}}
         for regimes that actually changed. Run after each learning cycle — this
         IS the feedback loop."""
-        all_trades: list[dict] = []
-        for fname in (
+        source_files = (
             "data/cache/forced_trades_history.json",
             "data/cache/intraday_sim_history.json",
             "data/cache/short_trades_history.json",
-        ):
+            "data/cache/continuous_sim_history.json",
+        )
+        all_trades: list[tuple[str, dict]] = []
+        for fname in source_files:
             p = Path(fname)
             if p.exists():
                 try:
-                    all_trades.extend(json.loads(p.read_text()))
+                    all_trades.extend((fname, t) for t in json.loads(p.read_text()))
                 except Exception:
                     pass
 
         by_regime: dict = {}
-        for trade in all_trades:
+        for fname, trade in all_trades:
             regime = trade.get("regime", "UNKNOWN")
             if regime in ("UNKNOWN", "ANY", "INTRADAY_SHORT", "HISTORICAL_SIM"):
                 continue
-            by_regime.setdefault(regime, {"wins": 0, "total": 0})
-            by_regime[regime]["total"] += 1
+            by_regime.setdefault(regime, {"weighted_wins": 0.0, "weighted_total": 0.0, "raw_total": 0})
+            weight = SOURCE_WEIGHTS.get(_source_tag(fname, trade), 1.0)
+            by_regime[regime]["weighted_total"] += weight
+            by_regime[regime]["raw_total"] += 1
             if trade.get("outcome") == "WIN":
-                by_regime[regime]["wins"] += 1
+                by_regime[regime]["weighted_wins"] += weight
 
         thresholds = self.load()
         changes = {}
 
         for regime, stats in by_regime.items():
-            if stats["total"] < MIN_EVIDENCE:
+            # Evidence gate stays on raw trade count — weighting affects the
+            # win-rate calculation, not whether we've seen "enough" trades.
+            if stats["raw_total"] < MIN_EVIDENCE:
                 continue
             if regime not in thresholds:
                 thresholds[regime] = {"judge_min": 6.5, "evidence": 0}
 
-            win_rate = stats["wins"] / stats["total"]
+            win_rate = (stats["weighted_wins"] / stats["weighted_total"]
+                       if stats["weighted_total"] else 0.0)
             old_threshold = thresholds[regime]["judge_min"]
 
             # WR > 60%: market is cooperative → lower bar slightly.
@@ -103,16 +130,26 @@ class AdaptiveThresholds:
 
             new_threshold = round(max(5.0, min(9.0, old_threshold + adjustment)), 2)
             thresholds[regime]["judge_min"] = new_threshold
-            thresholds[regime]["evidence"] = stats["total"]
+            thresholds[regime]["evidence"] = stats["raw_total"]
             thresholds[regime]["win_rate"] = round(win_rate, 3)
 
             if abs(new_threshold - old_threshold) > 0.05:
                 changes[regime] = {
                     "old": old_threshold,
                     "new": new_threshold,
-                    "evidence": stats["total"],
+                    "evidence": stats["raw_total"],
                     "win_rate": f"{win_rate:.0%}",
                 }
 
         self.save(thresholds)
+
+        if changes:
+            from src.analytics.strategy_scorecard import log_adaptation
+
+            for regime, c in changes.items():
+                log_adaptation(
+                    "threshold",
+                    f"{regime}: judge threshold {c['old']} -> {c['new']}",
+                    f"{c['evidence']} trades, {c['win_rate']} weighted win rate")
+
         return changes

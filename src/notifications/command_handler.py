@@ -482,12 +482,15 @@ class CommandHandler:
         top = sorted(kb, key=lambda e: -e.confidence)[:5]
         top_text = "\n".join(f"  [{e.confidence:.2f}] {e.pattern_description[:50]}"
                              for e in top) or "  (building…)"
+        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS
+
         thresholds = AdaptiveThresholds().load()
         thresh_lines = []
         for regime, data in sorted(thresholds.items()):
-            diff = data.get("judge_min", 6.5) - 6.5
+            regime_default = DEFAULT_THRESHOLDS.get(regime, {}).get("judge_min", 6.5)
+            diff = data.get("judge_min", regime_default) - regime_default
             arrow = "↑" if diff > 0.1 else "↓" if diff < -0.1 else "→"
-            thresh_lines.append(f"  {arrow} {regime}: {data.get('judge_min', 6.5):.1f}/10 "
+            thresh_lines.append(f"  {arrow} {regime}: {data.get('judge_min', regime_default):.1f}/10 "
                                 f"({data.get('evidence', 0)}t)")
         signals = SignalTracker().get_best_signals() or "No signal-accuracy data yet."
 
@@ -820,15 +823,18 @@ class CommandHandler:
             trend_icon = {"IMPROVING": "📈", "STABLE": "➡️", "DECAYING": "📉"}.get(pro.get("trend"), "➡️")
             pf = pro.get("profit_factor", 0)
             pf_str = "∞" if pf >= 999 else f"{pf:.2f}"
+            dd_label = pro.get("max_drawdown_label", "Max Drawdown")
             pro_text = (
-                f"Profit Factor: {pf_str} | Max Drawdown: {pro.get('max_drawdown_pct', 0):.1f}%\n"
+                f"Profit Factor: {pf_str} | {dd_label}: {pro.get('max_drawdown_pct', 0):.1f}%\n"
                 f"Trend: {trend_icon} {pro.get('trend', 'STABLE')} "
                 f"(rolling WR {pro.get('rolling_wr_recent20', 0)}% vs prior {pro.get('rolling_wr_prev20', 0)}%)")
+
+        from src.memory.lessons_writer import _icon_for
 
         top_kb = sorted(kb, key=lambda e: -e.confidence)[:3]
         kb_lines = []
         for e in top_kb:
-            icon = "✅" if "WON" in e.pattern_description else "❌"
+            icon = _icon_for(e.pattern_description)
             conf = round(e.confidence * 100)
             desc = e.pattern_description[:55]
             kb_lines.append(f"  {icon} [{conf}%] {desc}")
@@ -846,6 +852,38 @@ class CommandHandler:
         total_learning = forced_total_all + sim_total
         xgb_pct = min(100, round(total_learning / 30 * 100))
         xgb_bar = "█" * (xgb_pct // 10) + "░" * (10 - xgb_pct // 10)
+
+        try:
+            from src.analytics.strategy_scorecard import EngineScorecard
+
+            scorecard = EngineScorecard().compute()
+            throttles = EngineScorecard._load_throttles()
+            mode_icon = {"normal": "", "throttled": "🐢 throttled", "paused": "⏸ paused"}
+            score_lines = []
+            for engine, stats in scorecard.items():
+                mode = throttles.get(engine, {}).get("mode", "normal")
+                mode_text = mode_icon.get(mode, "")
+                pf_str = "∞" if stats["profit_factor"] >= 999 else f"{stats['profit_factor']:.2f}"
+                score_lines.append(
+                    f"  {engine}: PF {pf_str} · {stats['win_rate'] * 100:.0f}% WR "
+                    f"({stats['n_trades']}t) {mode_text}".rstrip())
+            scorecard_text = "\n".join(score_lines) or "  Still building..."
+        except Exception:
+            scorecard_text = "  Unavailable"
+
+        try:
+            from src.analytics.strategy_scorecard import ADAPTATION_LOG_FILE
+            import json as _json3
+
+            adaptation_history = (_json3.loads(ADAPTATION_LOG_FILE.read_text())
+                                  if ADAPTATION_LOG_FILE.exists() else [])
+            recent_adaptations = adaptation_history[-3:]
+            adapt_lines = [
+                f"  [{a['ts'][:16]}] ({a['type']}) {a['detail']}"
+                for a in reversed(recent_adaptations)
+            ] if recent_adaptations else ["  No self-adjustments yet"]
+        except Exception:
+            adapt_lines = ["  Unavailable"]
 
         msg = (
             "📊 *FULL SYSTEM REPORT*\n"
@@ -886,6 +924,12 @@ class CommandHandler:
             f"{xgb_bar} {xgb_pct}%\n"
             f"Needs {max(0, 30 - total_learning)} more trades\n\n"
 
+            "*🔧 Engine Scorecard*\n"
+            f"{scorecard_text}\n\n"
+
+            "*🧬 Recent Self-Adjustments*\n"
+            f"{chr(10).join(adapt_lines)}\n\n"
+
             "*💡 What to Improve*\n"
             f"{self._generate_improvement_tip(summary, forced, sim_wr, regime_name)}\n\n"
 
@@ -896,13 +940,14 @@ class CommandHandler:
     def _generate_improvement_tip(self, summary, forced, sim_wr, regime, thresholds=None):
         """Generates honest, specific improvement advice — explains what the
         adaptive learning loop is actually doing, not a generic tip."""
-        from src.memory.adaptive_thresholds import AdaptiveThresholds
+        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, AdaptiveThresholds
 
         thresh = thresholds if thresholds is not None else AdaptiveThresholds().load()
         regime_data = thresh.get(regime, {})
+        regime_default = DEFAULT_THRESHOLDS.get(regime, {}).get("judge_min", 6.5)
         evidence = regime_data.get("evidence", 0)
         regime_wr = regime_data.get("win_rate", None)
-        current_threshold = regime_data.get("judge_min", 6.5)
+        current_threshold = regime_data.get("judge_min", regime_default)
 
         lines = []
         forced_total = forced.get("total", 0)
@@ -913,7 +958,7 @@ class CommandHandler:
                 "thresholds activate. System is accumulating evidence.")
         elif regime_wr is not None:
             wr_pct = regime_wr * 100
-            direction = "lowered (easier)" if current_threshold < 6.5 else "raised (harder)"
+            direction = "lowered (easier)" if current_threshold < regime_default else "raised (harder)"
             lines.append(
                 f"*Adaptive threshold ({regime}):* {current_threshold:.1f}/10 — "
                 f"{direction} based on {evidence} trades ({wr_pct:.0f}% win rate).")
@@ -1014,15 +1059,15 @@ class CommandHandler:
 
     def _handle_thresholds(self, args):
         """adaptive judge thresholds by regime"""
-        from src.memory.adaptive_thresholds import AdaptiveThresholds
+        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, AdaptiveThresholds
 
         thresholds = AdaptiveThresholds().load()
         lines = ["📊 *Adaptive Thresholds*", "_(System self-adjusts based on trade outcomes)_\n"]
         for regime, data in sorted(thresholds.items()):
             evidence = data.get("evidence", 0)
             wr = data.get("win_rate", None)
-            threshold = data.get("judge_min", 6.5)
-            default = 6.5
+            default = DEFAULT_THRESHOLDS.get(regime, {}).get("judge_min", 6.5)
+            threshold = data.get("judge_min", default)
             diff = threshold - default
             arrow = "↑" if diff > 0.1 else "↓" if diff < -0.1 else "→"
             wr_str = f" WR={wr:.0%}" if wr else " (no data yet)"

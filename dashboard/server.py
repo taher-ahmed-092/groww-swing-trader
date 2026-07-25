@@ -345,6 +345,18 @@ def collect_dashboard_data() -> dict:
             continuous_sim = {"total": 0, "wins": 0, "losses": 0, "win_rate": 0,
                               "stocks_covered": 0, "recent": []}
 
+        try:
+            from src.analytics.strategy_scorecard import ADAPTATION_LOG_FILE, EngineScorecard
+
+            engine_scorecard = EngineScorecard().compute()
+            engine_throttles = EngineScorecard._load_throttles()
+            last_adaptation = None
+            if ADAPTATION_LOG_FILE.exists():
+                adaptation_history = _json.loads(ADAPTATION_LOG_FILE.read_text())
+                last_adaptation = adaptation_history[-1] if adaptation_history else None
+        except Exception:
+            engine_scorecard, engine_throttles, last_adaptation = {}, {}, None
+
         now_ist = datetime.now(IST)
         data = {
             "timestamp": now_ist.isoformat(),
@@ -390,6 +402,9 @@ def collect_dashboard_data() -> dict:
             "xgb_available": xgb_available,
             "stock_priors_count": stock_priors_count,
             "continuous_sim": continuous_sim,
+            "engine_scorecard": engine_scorecard,
+            "engine_throttles": engine_throttles,
+            "last_adaptation": last_adaptation,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)
