@@ -90,9 +90,11 @@ class AlwaysOnTrader:
         if engine_mode == "paused":
             return []
         # Cap per-call volume to avoid rate limits; this gets called every 15 min
-        # throughout the day.
+        # throughout the day. "probation" (still building current-era evidence
+        # post-fix) gets the same half-size treatment as "throttled" — allowed
+        # to keep proving itself, just not at full volume.
         needed = 5
-        if engine_mode == "throttled":
+        if engine_mode in ("throttled", "probation"):
             needed = max(1, needed // 2)
 
         regime_name = self._current_regime()

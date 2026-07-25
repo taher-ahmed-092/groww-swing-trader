@@ -29,7 +29,39 @@ except ImportError:
     XGBOOST_AVAILABLE = False
 
 MODEL_FILE = Path("data/models/signal_combiner.json")
+STATUS_FILE = Path("data/models/signal_combiner_status.json")
 MIN_TRADES_TO_TRAIN = 30
+
+
+def get_status(journal=None) -> dict:
+    """Single source of truth for XGBoost status — the dashboard progress bar,
+    the "AI Models Active" panel, and /report and /learn all call this instead
+    of each computing their own (previously divergent) formula. Progress is
+    measured in REAL pipeline trades only, matching what actually gates
+    train() — forced/sim trade counts were being blended into some of the old
+    formulas even though the model never trains on them."""
+    from src.memory.journal import TradingJournal
+
+    journal = journal or TradingJournal()
+    closed = len([t for t in journal.get_recent(n=200) if t.outcome in ("WIN", "LOSS")])
+    progress_pct = min(100, round(closed / MIN_TRADES_TO_TRAIN * 100))
+
+    if MODEL_FILE.exists():
+        val_accuracy = None
+        if STATUS_FILE.exists():
+            try:
+                val_accuracy = json.loads(STATUS_FILE.read_text()).get("val_accuracy")
+            except Exception:
+                pass
+        label = (f"Active (val acc {val_accuracy:.0f}%)" if val_accuracy is not None
+                 else "Active")
+        return {"active": True, "label": label, "val_accuracy": val_accuracy,
+                "progress_pct": 100, "n_real_trades": closed, "advisory_only": True}
+
+    return {"active": False,
+            "label": f"Waiting for real trades ({closed}/{MIN_TRADES_TO_TRAIN})",
+            "val_accuracy": None, "progress_pct": progress_pct,
+            "n_real_trades": closed, "advisory_only": True}
 
 
 class SignalCombiner:
@@ -107,6 +139,11 @@ class SignalCombiner:
         model.fit(X, y)
         self.MODEL_FILE.parent.mkdir(parents=True, exist_ok=True)
         model.save_model(str(self.MODEL_FILE))
+        try:
+            STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            STATUS_FILE.write_text(json.dumps({"val_accuracy": round(val_accuracy * 100, 1)}))
+        except OSError:
+            pass
 
         names = list(self.extract_features({}).keys())
         top = sorted(zip(names, model.feature_importances_), key=lambda x: -x[1])[:5]

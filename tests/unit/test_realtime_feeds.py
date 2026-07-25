@@ -16,7 +16,10 @@ def test_fii_dii_no_crash_on_network_error(tmp_path, monkeypatch):
     with patch("requests.Session") as mock_session:
         mock_session.return_value.__enter__.return_value.get.side_effect = Exception("network down")
         result = FIIDIIFeed().get_latest()
-    assert result == {}
+    # Contract change: a failed fetch with no prior last-known value returns
+    # an explicit "unavailable" marker, never a bare {} that a caller could
+    # mistake for a genuine (zero) result.
+    assert result == {"unavailable": True}
 
 
 def test_preopen_outside_window(tmp_path, monkeypatch):

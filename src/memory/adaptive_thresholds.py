@@ -94,7 +94,12 @@ class AdaptiveThresholds:
         by_regime: dict = {}
         for fname, trade in all_trades:
             regime = trade.get("regime", "UNKNOWN")
-            if regime in ("UNKNOWN", "ANY", "INTRADAY_SHORT", "HISTORICAL_SIM"):
+            # Allowlist, not denylist — some sources tag "regime" with a
+            # different vocabulary entirely (continuous_simulator.py stamps a
+            # per-trade MA50 comparison as "UPTREND"/"DOWNTREND", not a market
+            # regime). Only DEFAULT_THRESHOLDS' market-regime keys are valid
+            # evidence buckets for judge-threshold adjustment.
+            if regime not in DEFAULT_THRESHOLDS:
                 continue
             by_regime.setdefault(regime, {"weighted_wins": 0.0, "weighted_total": 0.0, "raw_total": 0})
             weight = SOURCE_WEIGHTS.get(_source_tag(fname, trade), 1.0)
@@ -112,7 +117,8 @@ class AdaptiveThresholds:
             if stats["raw_total"] < MIN_EVIDENCE:
                 continue
             if regime not in thresholds:
-                thresholds[regime] = {"judge_min": 6.5, "evidence": 0}
+                thresholds[regime] = dict(DEFAULT_THRESHOLDS.get(
+                    regime, {"judge_min": 6.5, "evidence": 0}))
 
             win_rate = (stats["weighted_wins"] / stats["weighted_total"]
                        if stats["weighted_total"] else 0.0)

@@ -187,15 +187,25 @@ class PerformanceAnalyzer:
             f"{streak_line}"
         )
 
-    def get_professional_metrics(self) -> dict:
-        """The metrics professional platforms lead with — profit factor, max
-        drawdown, and strategy-decay detection. Computed across ALL trade
-        sources (real + simulated), not just the real pipeline."""
-        from src.analytics.trade_loader import load_all_trade_history
+    @staticmethod
+    def _r_multiple(t: dict) -> float:
+        """Normalizes a trade's pnl_pct to "how many multiples of its own risk
+        did it make/lose" — falls back to a 3.0% stop distance when entry/stop
+        aren't available (some sim sources don't carry them)."""
+        entry, stop, pnl = t.get("entry"), t.get("stop"), t.get("pnl", 0)
+        if entry and stop and entry > 0:
+            stop_distance_pct = abs(entry - stop) / entry * 100
+        else:
+            stop_distance_pct = 0
+        if not stop_distance_pct:
+            stop_distance_pct = 3.0
+        return pnl / stop_distance_pct
 
-        trades = load_all_trade_history(self.journal)
+    def _compute_metrics(self, trades: list[dict]) -> dict | None:
+        """Profit factor, compounded drawdown, and strategy-decay detection
+        over a given trade subset. Returns None for an empty subset."""
         if not trades:
-            return {"status": "no_data"}
+            return None
 
         pnls = [t.get("pnl", 0) for t in trades]
         gross_wins = sum(p for p in pnls if p > 0)
@@ -204,29 +214,23 @@ class PerformanceAnalyzer:
         # would silently break JSON.parse() on the dashboard's WebSocket payload.
         profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else 999.99
 
-        # Max drawdown on an R-multiple equity curve, NOT raw pnl_pct summed.
-        # Bug found live: summing pnl_pct (a per-trade % return on price) across
-        # hundreds of trades as if it were an equity balance produced "581.5%"
-        # drawdown — a meaningless number. An R-multiple curve normalizes each
-        # trade to "how many multiples of its own risk did it make/lose," which
-        # is what a real equity curve assuming constant 1%-of-capital risk per
-        # trade would track. Falls back to a 3.0% stop distance when entry/stop
-        # aren't available (some sim sources don't carry them).
-        def _r_multiple(t: dict) -> float:
-            entry, stop, pnl = t.get("entry"), t.get("stop"), t.get("pnl", 0)
-            if entry and stop and entry > 0:
-                stop_distance_pct = abs(entry - stop) / entry * 100
-            else:
-                stop_distance_pct = 0
-            if not stop_distance_pct:
-                stop_distance_pct = 3.0
-            return pnl / stop_distance_pct
-
-        equity = peak = max_dd = 0.0
+        # Max drawdown on a COMPOUNDED R-multiple equity curve, assuming a
+        # constant 1%-of-capital risk per trade — not raw pnl_pct summed
+        # (produced a meaningless "581.5%" across hundreds of trades) and not
+        # an ADDITIVE R-multiple curve either (that can still exceed 100% given
+        # enough losing trades in a row, which is not how a real equity balance
+        # behaves — equity can never go negative or "more than fully" drawn
+        # down). Compounding equity *= (1 + 0.01*R) keeps the curve
+        # mathematically bounded in (0, 100)%.
+        equity = 100.0
+        peak = equity
+        max_dd = 0.0
         for t in trades:
-            equity += _r_multiple(t)
+            r = self._r_multiple(t)
+            equity *= (1 + 0.01 * r)
             peak = max(peak, equity)
-            max_dd = max(max_dd, peak - equity)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - equity) / peak * 100)
 
         # Strategy decay: rolling 20-trade WR, latest vs previous.
         recent20 = pnls[-20:]
@@ -238,13 +242,40 @@ class PerformanceAnalyzer:
         return {
             "profit_factor": profit_factor,
             "max_drawdown_pct": round(max_dd, 2),
-            "max_drawdown_label": "Max DD (1% risk/trade)",
+            "max_drawdown_label": "Max DD (compounded, 1% risk/trade)",
             "rolling_wr_recent20": round(recent_wr * 100, 1),
             "rolling_wr_prev20": round(prev_wr * 100, 1),
             "decay_alert": decay_alert,
             "trend": ("IMPROVING" if recent_wr > prev_wr + 0.05
                       else "DECAYING" if decay_alert else "STABLE"),
+            "n_trades": len(trades),
         }
+
+    def get_professional_metrics(self) -> dict:
+        """The metrics professional platforms lead with — profit factor, max
+        drawdown, and strategy-decay detection. Computed across ALL trade
+        sources (real + simulated), not just the real pipeline.
+
+        Era segmentation: the multi-day-hold fix (commit f262968) replaced a
+        structurally broken engine (90-min exits vs 6%+ targets). Trades from
+        before that fix must not dilute headline numbers with a different,
+        broken system's results — the top-level fields here are CURRENT-ERA
+        only; the full history (pre- + post-fix) is under "all_time"."""
+        from src.analytics.era import split_by_era
+        from src.analytics.trade_loader import load_all_trade_history
+
+        trades = load_all_trade_history(self.journal)
+        if not trades:
+            return {"status": "no_data"}
+
+        current_era, all_time = split_by_era(trades)
+        current_metrics = self._compute_metrics(current_era) or {"status": "no_data", "n_trades": 0}
+        all_time_metrics = self._compute_metrics(all_time) or {"status": "no_data", "n_trades": 0}
+
+        result = dict(current_metrics)
+        result["all_time"] = all_time_metrics
+        result["all_time_label"] = "incl. pre-fix era"
+        return result
 
     def should_pause_trading(self) -> tuple[bool, str]:
         s = self.get_summary()

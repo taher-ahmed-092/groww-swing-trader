@@ -38,10 +38,21 @@ def test_scorecard_restores_high_profit_factor(tmp_path, monkeypatch):
     assert changes["LIVE_FORCED"]["new"] == "normal"
 
 
-def test_scorecard_no_change_below_evidence_floor(tmp_path, monkeypatch):
+def test_scorecard_probation_below_20_current_era_trades(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # Only 10 trades — below MIN_TRADES_FOR_THROTTLE (50), even with a terrible PF.
+    # Only 10 trades — below PROBATION_MIN_TRADES (20): the engine is still
+    # building current-era evidence, so it goes to "probation" (half-size
+    # entries), not silently staying "normal" or getting stuck "paused".
     _write_forced_history(n_wins=1, n_losses=9, pnl_win=1.0, pnl_loss=-5.0)
+    changes = EngineScorecard().apply_throttles()
+    assert changes["LIVE_FORCED"]["new"] == "probation"
+
+
+def test_scorecard_no_change_between_20_and_50_trades(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # 30 trades — past probation (20) but below MIN_TRADES_FOR_THROTTLE (50):
+    # not enough evidence yet for a pause/throttle/restore decision.
+    _write_forced_history(n_wins=10, n_losses=20, pnl_win=1.0, pnl_loss=-5.0)
     changes = EngineScorecard().apply_throttles()
     assert "LIVE_FORCED" not in changes
 

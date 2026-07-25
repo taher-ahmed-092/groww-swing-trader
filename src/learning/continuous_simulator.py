@@ -73,7 +73,7 @@ class ContinuousSimulator:
 
         mode = EngineScorecard.get_mode("CONTINUOUS_SIM")
         windows_per_stock = (1 if mode == "paused"
-                            else max(1, self.DAYS_PER_STOCK // 2) if mode == "throttled"
+                            else max(1, self.DAYS_PER_STOCK // 2) if mode in ("throttled", "probation")
                             else self.DAYS_PER_STOCK)
 
         wins = losses = new_patterns = 0

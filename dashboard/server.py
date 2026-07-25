@@ -209,9 +209,18 @@ def collect_dashboard_data() -> dict:
                 "days_held": (datetime.now() - t.executed_at).days if t.executed_at else 0,
             })
 
+        from src.analytics.era import split_by_era
+
         all_trades = _load_all_trade_history(journal)
-        pnl_history = all_trades[-60:]  # last 60 across all sources, for the chart
-        combined_totals = _combined_totals(all_trades)
+        current_era_trades, _all_time_trades = split_by_era(all_trades)
+        # Headline chart/scoreboard = current (post-fix) era only; the pre-fix
+        # broken-engine era must not dilute what the user sees as "the system's
+        # results." Falls back to all_time only while the current era still has
+        # zero trades of its own (fresh deploy, nothing to show yet).
+        chart_source = current_era_trades or all_trades
+        pnl_history = chart_source[-60:]
+        combined_totals = _combined_totals(current_era_trades)
+        combined_totals_all_time = _combined_totals(all_trades)
         wl_chart = [{"outcome": t.outcome, "symbol": t.symbol}
                     for t in recent if t.outcome in ("WIN", "LOSS")]
 
@@ -242,6 +251,15 @@ def collect_dashboard_data() -> dict:
             forced_summary = {"total": 0, "wins": 0, "losses": 0, "win_rate": 0, "recent": []}
 
         try:
+            from src.ml.signal_combiner import get_status as get_xgb_status
+
+            xgb_status = get_xgb_status(journal)
+            xgb_available = xgb_status["active"]
+        except Exception:
+            xgb_status = {"active": False, "label": "Unavailable", "progress_pct": 0}
+            xgb_available = False
+
+        try:
             import json as _json
 
             forced_history = []
@@ -263,12 +281,11 @@ def collect_dashboard_data() -> dict:
                 "forced_wr": round(forced_wins / forced_total * 100, 1) if forced_total else 0,
                 "kb_patterns": kb_count,
                 "replay_patterns": replay_kb,
-                "xgboost_progress": min(100, round(
-                    (forced_total * 0.3 + summary.get("total_trades", 0)) / 30 * 100)),
             }
         except Exception:
             learning_metrics = {"forced_total": 0, "forced_wins": 0, "forced_wr": 0,
-                                "kb_patterns": 0, "replay_patterns": 0, "xgboost_progress": 0}
+                                "kb_patterns": 0, "replay_patterns": 0}
+        learning_metrics["xgboost_progress"] = xgb_status.get("progress_pct", 0)
 
         _KB_ICONS = {"HISTORICAL_REPLAY": "📡", "FORCED_LEARNING": "⚡",
                      "INTRADAY_SIMULATION": "🔬", "SHORT_SIMULATION": "⏱️"}
@@ -331,13 +348,6 @@ def collect_dashboard_data() -> dict:
             stock_priors_count = 0
 
         try:
-            from src.ml.signal_combiner import MODEL_FILE as XGB_MODEL_FILE
-
-            xgb_available = XGB_MODEL_FILE.exists()
-        except Exception:
-            xgb_available = False
-
-        try:
             from src.learning.continuous_simulator import ContinuousSimulator
 
             continuous_sim = ContinuousSimulator().get_stats()
@@ -393,6 +403,7 @@ def collect_dashboard_data() -> dict:
             "learning_metrics": learning_metrics,
             "adaptive_thresholds": adaptive_data,
             "combined_totals": combined_totals,
+            "combined_totals_all_time": combined_totals_all_time,
             "professional_metrics": pro_metrics,
             "funny_line": funny_line,
             "fii_dii": fii_dii,
@@ -400,6 +411,7 @@ def collect_dashboard_data() -> dict:
             "auto_rules": auto_rules,
             "rf_model": rf_model,
             "xgb_available": xgb_available,
+            "xgb_status": xgb_status,
             "stock_priors_count": stock_priors_count,
             "continuous_sim": continuous_sim,
             "engine_scorecard": engine_scorecard,

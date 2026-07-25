@@ -825,9 +825,18 @@ class CommandHandler:
             pf_str = "∞" if pf >= 999 else f"{pf:.2f}"
             dd_label = pro.get("max_drawdown_label", "Max Drawdown")
             pro_text = (
-                f"Profit Factor: {pf_str} | {dd_label}: {pro.get('max_drawdown_pct', 0):.1f}%\n"
+                f"Profit Factor: {pf_str} | {dd_label}: {pro.get('max_drawdown_pct', 0):.1f}% "
+                f"({pro.get('n_trades', 0)}t post-fix)\n"
                 f"Trend: {trend_icon} {pro.get('trend', 'STABLE')} "
                 f"(rolling WR {pro.get('rolling_wr_recent20', 0)}% vs prior {pro.get('rolling_wr_prev20', 0)}%)")
+            all_time = pro.get("all_time", {})
+            if all_time.get("n_trades"):
+                at_pf = all_time.get("profit_factor", 0)
+                at_pf_str = "∞" if at_pf >= 999 else f"{at_pf:.2f}"
+                pro_text += (
+                    f"\n_All-time ({pro.get('all_time_label', 'incl. pre-fix era')}, "
+                    f"{all_time['n_trades']}t): PF {at_pf_str} | "
+                    f"DD {all_time.get('max_drawdown_pct', 0):.1f}%_")
 
         from src.memory.lessons_writer import _icon_for
 
@@ -849,8 +858,13 @@ class CommandHandler:
         nifty = regime.get("nifty_price") or 0
         rsi = regime.get("rsi") or 0
 
-        total_learning = forced_total_all + sim_total
-        xgb_pct = min(100, round(total_learning / 30 * 100))
+        try:
+            from src.ml.signal_combiner import get_status as get_xgb_status
+
+            xgb_status = get_xgb_status(j)
+        except Exception:
+            xgb_status = {"label": "Unavailable", "progress_pct": 0}
+        xgb_pct = xgb_status.get("progress_pct", 0)
         xgb_bar = "█" * (xgb_pct // 10) + "░" * (10 - xgb_pct // 10)
 
         try:
@@ -858,7 +872,8 @@ class CommandHandler:
 
             scorecard = EngineScorecard().compute()
             throttles = EngineScorecard._load_throttles()
-            mode_icon = {"normal": "", "throttled": "🐢 throttled", "paused": "⏸ paused"}
+            mode_icon = {"normal": "", "throttled": "🐢 throttled", "paused": "⏸ paused",
+                        "probation": "🩹 probation"}
             score_lines = []
             for engine, stats in scorecard.items():
                 mode = throttles.get(engine, {}).get("mode", "normal")
@@ -922,7 +937,7 @@ class CommandHandler:
 
             "*🤖 XGBoost Model*\n"
             f"{xgb_bar} {xgb_pct}%\n"
-            f"Needs {max(0, 30 - total_learning)} more trades\n\n"
+            f"{xgb_status.get('label', '')} (advisory only — never blended into judge score)\n\n"
 
             "*🔧 Engine Scorecard*\n"
             f"{scorecard_text}\n\n"
@@ -1090,19 +1105,19 @@ class CommandHandler:
 
         fiidii = FIIDIIFeed().get_latest()
         upcoming = EconomicCalendar().get_upcoming(days_ahead=14)
-        fii = fiidii.get("fii_net_crore", 0)
-        dii = fiidii.get("dii_net_crore", 0)
-        signal = fiidii.get("signal", "NEUTRAL")
-        emoji = "🟢" if signal == "BULLISH" else "🔴" if signal == "BEARISH" else "🟡"
-        lines = [
-            "💹 *Institutional Flows + Calendar*",
-            "━━━━━━━━━━━━━━━━━━━━━━━━",
-            f"*FII:* {fii:+,.0f} Cr {emoji}",
-            f"*DII:* {dii:+,.0f} Cr",
-            f"*Signal:* {fiidii.get('signal_reason', '')}",
-            "",
-            "*Upcoming Events:*",
-        ]
+        lines = ["💹 *Institutional Flows + Calendar*", "━━━━━━━━━━━━━━━━━━━━━━━━"]
+        if fiidii.get("unavailable"):
+            lines.append("*FII/DII:* unavailable — no successful fetch yet")
+        else:
+            fii = fiidii.get("fii_net_crore", 0)
+            dii = fiidii.get("dii_net_crore", 0)
+            signal = fiidii.get("signal", "NEUTRAL")
+            emoji = "🟢" if signal == "BULLISH" else "🔴" if signal == "BEARISH" else "🟡"
+            as_of = f" (as of {fiidii['as_of']})" if fiidii.get("stale") and fiidii.get("as_of") else ""
+            lines.append(f"*FII:* {fii:+,.0f} Cr {emoji}{as_of}")
+            lines.append(f"*DII:* {dii:+,.0f} Cr{as_of}")
+            lines.append(f"*Signal:* {fiidii.get('signal_reason', '')}")
+        lines += ["", "*Upcoming Events:*"]
         for ev in upcoming[:5]:
             impact_emoji = "🚨" if ev["impact"] == "HIGH" else "⚠️"
             lines.append(f"{impact_emoji} *{ev['event']}* — {ev['days_away']}d away")

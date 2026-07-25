@@ -73,7 +73,19 @@ class NSEPreOpenFeed:
 class FIIDIIFeed:
     """FII/DII provisional data — released ~5:30 PM on NSE."""
 
-    def get_latest(self) -> dict:
+    @staticmethod
+    def _last_known_file() -> Path:
+        """Last-known-good fetch, persisted across days — the daily cache_file
+        above is per-calendar-day and empty on weekends/failures; this file
+        survives those gaps so callers can show "last known value (as of
+        <date>)" instead of a fetch failure silently rendering as a real
+        "+0Cr" data point (audit finding: indistinguishable from a genuine
+        zero-flow day). Resolved against the module-level CACHE_DIR at call
+        time (not frozen as a class attribute) so test monkeypatching of
+        CACHE_DIR is honored."""
+        return CACHE_DIR / "fiidii_last_known.json"
+
+    def _fetch_today(self) -> dict:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_file = CACHE_DIR / f"fiidii_{date.today()}.json"
         if cache_file.exists():
@@ -101,6 +113,9 @@ class FIIDIIFeed:
                 elif "DII" in cat.upper():
                     result["dii_net_crore"] = round(net, 2)
 
+            if not result:
+                return {}
+
             fii = result.get("fii_net_crore", 0)
             if fii > 500:
                 result["signal"] = "BULLISH"
@@ -112,11 +127,36 @@ class FIIDIIFeed:
                 result["signal"] = "NEUTRAL"
                 result["signal_reason"] = "Modest FII activity"
 
-            if result:
-                cache_file.write_text(json.dumps(result))
+            cache_file.write_text(json.dumps(result))
             return result
         except Exception:
             return {}
+
+    def get_latest(self) -> dict:
+        """Returns today's FII/DII flows if fetched successfully. On weekend/
+        failure, falls back to the last successfully-fetched value tagged with
+        its date ("as_of" + "stale": True) rather than a bare {} that the
+        caller could mistake for a genuine zero. Returns {"unavailable": True}
+        only if nothing has EVER been fetched successfully."""
+        last_known_file = self._last_known_file()
+        result = self._fetch_today()
+        if result:
+            fresh = {**result, "as_of": date.today().isoformat(), "stale": False}
+            try:
+                last_known_file.parent.mkdir(parents=True, exist_ok=True)
+                last_known_file.write_text(json.dumps(fresh))
+            except OSError:
+                pass
+            return fresh
+
+        if last_known_file.exists():
+            try:
+                last_known = json.loads(last_known_file.read_text())
+                return {**last_known, "stale": True}
+            except Exception:
+                pass
+
+        return {"unavailable": True}
 
 
 class EconomicCalendar:

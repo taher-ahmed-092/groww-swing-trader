@@ -822,6 +822,10 @@ function updateDashboard(d){
   document.getElementById('owner').textContent=d.owner||OWNER;
 
   const ct=d.combined_totals||{};
+  const ctAll=d.combined_totals_all_time||{};
+  document.getElementById('scoreboard')?.setAttribute('title',
+    `Showing post-fix era only. All-time (incl. pre-fix era): ${ctAll.total||0} trades, `+
+    `${(ctAll.win_rate||0).toFixed(1)}% WR`);
   countUp(document.getElementById('sb-total'),ct.total||0,800);
   countUp(document.getElementById('sb-won'),ct.won||0,800);
   countUp(document.getElementById('sb-lost'),ct.lost||0,800);
@@ -881,16 +885,24 @@ function updateDashboard(d){
   updateLossDiagnosis(adaptive);
 
   const fiiDii=d.fii_dii||{};
-  const fdSignal=fiiDii.signal||'NEUTRAL';
-  const fdEmoji=fdSignal==='BULLISH'?'🟢':fdSignal==='BEARISH'?'🔴':'🟡';
   const fdEl=document.getElementById('fii-dii-badge');
-  if(fdEl)fdEl.textContent=`${fdEmoji} FII ${(fiiDii.fii_net_crore||0)>=0?'+':''}${fiiDii.fii_net_crore||0}Cr`;
+  if(fdEl){
+    if(fiiDii.unavailable){
+      fdEl.textContent='⚪ FII: unavailable';
+    }else{
+      const fdSignal=fiiDii.signal||'NEUTRAL';
+      const fdEmoji=fdSignal==='BULLISH'?'🟢':fdSignal==='BEARISH'?'🔴':'🟡';
+      const asOf=fiiDii.stale&&fiiDii.as_of?` (as of ${fiiDii.as_of})`:'';
+      fdEl.textContent=`${fdEmoji} FII ${(fiiDii.fii_net_crore||0)>=0?'+':''}${fiiDii.fii_net_crore||0}Cr${asOf}`;
+    }
+  }
 
   const rfModel=d.rf_model||{};
   const rfEl=document.getElementById('rf-status');
-  if(rfEl)rfEl.textContent=rfModel.available?'✅ Active':'⏳ Training';
+  if(rfEl)rfEl.textContent=rfModel.available?'✅ Active (advisory only)':'⏳ Training';
   const xgbEl=document.getElementById('xgb-status');
-  if(xgbEl)xgbEl.textContent=d.xgb_available?'✅ Active':'⏳ Training';
+  const xgbStatus=d.xgb_status||{};
+  if(xgbEl)xgbEl.textContent=(xgbStatus.active?'✅ ':'⏳ ')+(xgbStatus.label||(d.xgb_available?'Active':'Training'))+(xgbStatus.active?' (advisory only)':'');
   const arEl=document.getElementById('auto-rules-count');
   if(arEl)arEl.textContent=(d.auto_rules||{}).total||0;
   const topFeatEl=document.getElementById('top-feature-line');
@@ -926,10 +938,17 @@ function updateDashboard(d){
 
   const pm=d.professional_metrics||{};
   if(pm.status!=='no_data'){
+    const pmAll=pm.all_time||{};
     const pfEl=document.getElementById('pf-num');
-    if(pfEl)pfEl.textContent=(pm.profit_factor>=999?'∞':(pm.profit_factor||0).toFixed(2));
+    if(pfEl){
+      pfEl.textContent=(pm.profit_factor>=999?'∞':(pm.profit_factor||0).toFixed(2));
+      pfEl.title=`All-time (incl. pre-fix era): PF ${pmAll.profit_factor>=999?'∞':(pmAll.profit_factor||0).toFixed(2)}`;
+    }
     const ddEl=document.getElementById('dd-num');
-    if(ddEl)ddEl.textContent=(pm.max_drawdown_pct||0).toFixed(1)+'%';
+    if(ddEl){
+      ddEl.textContent=(pm.max_drawdown_pct||0).toFixed(1)+'%';
+      ddEl.title=`${pm.max_drawdown_label||''} · all-time: ${(pmAll.max_drawdown_pct||0).toFixed(1)}%`;
+    }
     const trendEl=document.getElementById('trend-badge');
     if(trendEl){
       const trend=pm.trend||'STABLE';

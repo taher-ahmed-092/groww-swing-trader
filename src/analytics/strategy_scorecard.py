@@ -26,6 +26,11 @@ MIN_TRADES_FOR_THROTTLE = 50
 PF_PAUSE_THRESHOLD = 0.5
 PF_THROTTLE_THRESHOLD = 0.8
 PF_RESTORE_THRESHOLD = 1.2
+# Below this many CURRENT-ERA trades, an engine is still proving itself post-fix
+# — "probation" (half-size entries) lets evidence accumulate instead of either
+# trading it silently at full size or leaving it stuck "paused" on dead
+# pre-fix-era data forever.
+PROBATION_MIN_TRADES = 20
 
 # Each engine's history source + how to identify its trades within that file.
 _ENGINE_SOURCES = {
@@ -63,16 +68,26 @@ def log_adaptation(entry_type: str, detail: str, evidence: str) -> None:
 class EngineScorecard:
     def compute(self) -> dict:
         """Per-engine {win_rate, avg_win, avg_loss, profit_factor, expectancy,
-        n_trades} over each engine's last 100 closed trades."""
+        n_trades} over each engine's last 100 CURRENT-ERA (post-f262968)
+        closed trades — pre-fix trades came from a structurally broken engine
+        (90-min holds vs 6%+ targets) and must not dilute the read on whether
+        the fixed engine is actually working."""
+        from src.analytics.era import split_by_era
+
         scorecard: dict = {}
         for engine, (fname, matcher) in _ENGINE_SOURCES.items():
-            trades = self._load_matching(fname, matcher)[-100:]
-            scorecard[engine] = self._score(trades)
+            trades = self._load_matching(fname, matcher)
+            current_era, _all_time = split_by_era(trades)
+            scorecard[engine] = self._score(current_era[-100:])
         return scorecard
 
     def apply_throttles(self) -> dict:
-        """Writes engine_throttle.json based on compute(); returns only the
-        engines whose mode actually changed this run, logging each change."""
+        """Writes engine_throttle.json based on compute() (current-era only);
+        returns only the engines whose mode actually changed this run, logging
+        each change. Below PROBATION_MIN_TRADES current-era trades, an engine
+        goes to "probation" regardless of any stale pre-fix "paused" state —
+        otherwise a correctly-fixed engine could stay paused forever on dead
+        pre-fix data and never get the chance to prove itself with new evidence."""
         scorecard = self.compute()
         current = self._load_throttles()
         changes: dict = {}
@@ -82,8 +97,12 @@ class EngineScorecard:
             pf = stats["profit_factor"]
             prev_mode = current.get(engine, {}).get("mode", "normal")
 
-            if n < MIN_TRADES_FOR_THROTTLE:
-                new_mode = prev_mode  # not enough evidence to change anything yet
+            if n < PROBATION_MIN_TRADES:
+                new_mode = "probation"
+                reason = (f"current-era evidence still building ({n}/{PROBATION_MIN_TRADES} "
+                          "trades) — half-size entries while proving itself")
+            elif n < MIN_TRADES_FOR_THROTTLE:
+                new_mode = "probation" if prev_mode == "paused" else prev_mode
                 reason = f"insufficient evidence ({n}/{MIN_TRADES_FOR_THROTTLE} trades)"
             elif pf < PF_PAUSE_THRESHOLD:
                 new_mode, reason = "paused", f"PF {pf:.2f} < {PF_PAUSE_THRESHOLD} over {n} trades"

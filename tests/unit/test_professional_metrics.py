@@ -57,8 +57,8 @@ def test_drawdown_uses_r_multiples_not_raw_pnl_sum():
     ] * 50  # simulate the "hundreds of trades" scale from the audit
     with patch("src.analytics.trade_loader.load_all_trade_history", return_value=trades):
         metrics = pa.get_professional_metrics()
-    assert 0 <= metrics["max_drawdown_pct"] <= 50
-    assert metrics["max_drawdown_label"] == "Max DD (1% risk/trade)"
+    assert 0 <= metrics["max_drawdown_pct"] < 100
+    assert metrics["max_drawdown_label"] == "Max DD (compounded, 1% risk/trade)"
 
 
 def test_drawdown_falls_back_to_3pct_stop_distance_when_unavailable():

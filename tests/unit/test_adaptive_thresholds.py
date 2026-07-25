@@ -7,6 +7,13 @@ from src.memory.adaptive_thresholds import AdaptiveThresholds
 
 
 def _write_history(tmp_path, monkeypatch, trades):
+    # Audit bug: log_adaptation() (called at the end of update_from_all_trades())
+    # writes to the real, relative data/cache/adaptation_log.json — every test
+    # in this file that calls update_from_all_trades() without chdir'ing into
+    # tmp_path was polluting the ACTUAL repo's adaptation log with synthetic
+    # fixture data (round win rates, "200 trades" etc), which the dashboard then
+    # displayed as if it were a genuine self-adjustment. chdir isolates it.
+    monkeypatch.chdir(tmp_path)
     hist = tmp_path / "forced.json"
     hist.write_text(json.dumps(trades))
     monkeypatch.setattr(
@@ -112,3 +119,34 @@ def test_needs_15_evidence(tmp_path, monkeypatch):
     at = AdaptiveThresholds()
     changes = at.update_from_all_trades()
     assert changes == {}
+
+
+def test_threshold_write_impossible_without_evidence(tmp_path, monkeypatch):
+    """A threshold change (and its adaptation-log entry) must be structurally
+    impossible below MIN_EVIDENCE — regression for the phantom "BEAR_TRENDING
+    8.0 -> 9.0 with 0 real evidence" bug (root cause: an unrelated test file
+    leaking synthetic fixture data into the real adaptation log)."""
+    from src.analytics.strategy_scorecard import ADAPTATION_LOG_FILE
+
+    monkeypatch.setattr(
+        "src.memory.adaptive_thresholds.THRESHOLDS_FILE", tmp_path / "th.json")
+    trades = [{"regime": "BEAR_TRENDING", "outcome": "LOSS"} for _ in range(14)]
+    _write_history(tmp_path, monkeypatch, trades)
+    at = AdaptiveThresholds()
+    changes = at.update_from_all_trades()
+    assert changes == {}
+    assert not ADAPTATION_LOG_FILE.exists()
+
+
+def test_non_market_regime_tag_ignored(tmp_path, monkeypatch):
+    """continuous_simulator.py tags trades with stock-level "UPTREND"/
+    "DOWNTREND", not a market regime — those must never bucket into
+    threshold evidence (they aren't in DEFAULT_THRESHOLDS)."""
+    monkeypatch.setattr(
+        "src.memory.adaptive_thresholds.THRESHOLDS_FILE", tmp_path / "th.json")
+    trades = [{"regime": "DOWNTREND", "outcome": "LOSS"} for _ in range(30)]
+    _write_history(tmp_path, monkeypatch, trades)
+    at = AdaptiveThresholds()
+    changes = at.update_from_all_trades()
+    assert changes == {}
+    assert at.load().get("BEAR_TRENDING", {}).get("judge_min", 8.0) == 8.0
