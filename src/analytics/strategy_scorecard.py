@@ -31,6 +31,12 @@ PF_RESTORE_THRESHOLD = 1.2
 # trading it silently at full size or leaving it stuck "paused" on dead
 # pre-fix-era data forever.
 PROBATION_MIN_TRADES = 20
+# A "paused"/"throttled" state older than this is stale enough to re-evaluate
+# immediately rather than wait for the scheduled apply_throttles() runs
+# (4:30 PM / 11:15 PM) — otherwise a stale pre-fix "paused" state can deadlock
+# an engine for hours: probation re-evaluation only happens inside
+# apply_throttles(), so nothing lifts the pause until the next scheduled run.
+STALE_THROTTLE_HOURS = 12
 
 # Each engine's history source + how to identify its trades within that file.
 _ENGINE_SOURCES = {
@@ -71,7 +77,14 @@ class EngineScorecard:
         n_trades} over each engine's last 100 CURRENT-ERA (post-f262968)
         closed trades — pre-fix trades came from a structurally broken engine
         (90-min holds vs 6%+ targets) and must not dilute the read on whether
-        the fixed engine is actually working."""
+        the fixed engine is actually working. Re-evaluates any stale
+        paused/throttled state first (see reevaluate_if_stale) so callers
+        never read a scorecard against a mode that's been deadlocked for
+        hours waiting on the scheduled apply_throttles() job."""
+        self.reevaluate_if_stale()
+        return self._compute_raw()
+
+    def _compute_raw(self) -> dict:
         from src.analytics.era import split_by_era
 
         scorecard: dict = {}
@@ -81,14 +94,36 @@ class EngineScorecard:
             scorecard[engine] = self._score(current_era[-100:])
         return scorecard
 
+    def reevaluate_if_stale(self) -> None:
+        """If engine_throttle.json holds any "paused"/"throttled" state
+        updated more than STALE_THROTTLE_HOURS ago, immediately re-run
+        apply_throttles() — called from here (so any compute() caller, e.g.
+        the dashboard, self-heals) and from runner.py's startup sequence (so a
+        restart doesn't wait for the 4:30 PM / 11:15 PM scheduled jobs to lift
+        a stale pre-fix pause)."""
+        throttles = self._load_throttles()
+        now = datetime.now(IST)
+        for state in throttles.values():
+            if state.get("mode") not in ("paused", "throttled"):
+                continue
+            try:
+                updated = datetime.fromisoformat(state["updated"])
+            except Exception:
+                self.apply_throttles()
+                return
+            if (now - updated).total_seconds() > STALE_THROTTLE_HOURS * 3600:
+                self.apply_throttles()
+                return
+
     def apply_throttles(self) -> dict:
-        """Writes engine_throttle.json based on compute() (current-era only);
-        returns only the engines whose mode actually changed this run, logging
-        each change. Below PROBATION_MIN_TRADES current-era trades, an engine
-        goes to "probation" regardless of any stale pre-fix "paused" state —
-        otherwise a correctly-fixed engine could stay paused forever on dead
-        pre-fix data and never get the chance to prove itself with new evidence."""
-        scorecard = self.compute()
+        """Writes engine_throttle.json based on _compute_raw() (current-era
+        only); returns only the engines whose mode actually changed this run,
+        logging each change. Below PROBATION_MIN_TRADES current-era trades, an
+        engine goes to "probation" regardless of any stale pre-fix "paused"
+        state — otherwise a correctly-fixed engine could stay paused forever
+        on dead pre-fix data and never get the chance to prove itself with new
+        evidence."""
+        scorecard = self._compute_raw()
         current = self._load_throttles()
         changes: dict = {}
 

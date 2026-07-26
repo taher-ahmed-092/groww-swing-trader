@@ -870,6 +870,16 @@ if __name__ == "__main__":
     except Exception as exc:
         console.print(f"[yellow]KB status unavailable: {exc}[/yellow]")
 
+    # Breaks the throttle deadlock on restart: a stale paused/throttled state
+    # from before this process started would otherwise sit unreviewed until
+    # the next scheduled apply_throttles() run (4:30 PM / 11:15 PM).
+    try:
+        from src.analytics.strategy_scorecard import EngineScorecard
+
+        EngineScorecard().reevaluate_if_stale()
+    except Exception as exc:
+        console.print(f"[yellow]Engine throttle re-eval failed: {exc}[/yellow]")
+
     scheduler = BackgroundScheduler(timezone=TZ)
     scheduler.add_job(weekly_research_job, "cron", day_of_week="sun", hour=19, minute=0)
     scheduler.add_job(daily_premarket_job, "cron", day_of_week="mon-fri", hour=9, minute=0)

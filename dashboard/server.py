@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from config.settings import settings
+from src.analytics import era
 from src.analytics.performance import PerformanceAnalyzer
 from src.data.fetcher import MarketDataFetcher
 from src.data.regime_detector import RegimeDetector
@@ -209,10 +210,8 @@ def collect_dashboard_data() -> dict:
                 "days_held": (datetime.now() - t.executed_at).days if t.executed_at else 0,
             })
 
-        from src.analytics.era import split_by_era
-
         all_trades = _load_all_trade_history(journal)
-        current_era_trades, _all_time_trades = split_by_era(all_trades)
+        current_era_trades, _all_time_trades = era.split_by_era(all_trades)
         # Headline chart/scoreboard = current (post-fix) era only; the pre-fix
         # broken-engine era must not dilute what the user sees as "the system's
         # results." Falls back to all_time only while the current era still has
@@ -378,6 +377,8 @@ def collect_dashboard_data() -> dict:
             "nifty_price": regime_data.get("nifty_price"),
             "nifty_rsi": regime_data.get("rsi"),
             "market_open": _market_open(now_ist),
+            "is_weekend": now_ist.weekday() >= 5,
+            "era_start": era.get_era_start(),
             "system_uptime": _uptime(now_ist),
             "next_jobs": _next_jobs(now_ist),
             "summary": {

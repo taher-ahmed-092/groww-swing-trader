@@ -4,7 +4,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from src.analytics import era
 from src.analytics.strategy_scorecard import THROTTLE_FILE, EngineScorecard
+
+
+@pytest.fixture(autouse=True)
+def _isolate_era_marker(tmp_path, monkeypatch):
+    # ERA_MARKER_FILE is anchored to the repo root (not cwd), so chdir alone
+    # no longer isolates it — every test in this file must patch it directly.
+    monkeypatch.setattr(era, "ERA_MARKER_FILE", tmp_path / "era_marker.json")
 
 
 def _write_forced_history(n_wins: int, n_losses: int, pnl_win: float, pnl_loss: float) -> None:
@@ -60,3 +70,42 @@ def test_scorecard_no_change_between_20_and_50_trades(tmp_path, monkeypatch):
 def test_get_mode_defaults_to_normal(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert EngineScorecard.get_mode("LIVE_FORCED") == "normal"
+
+
+def test_stale_pause_reevaluates_to_probation_on_compute(tmp_path, monkeypatch):
+    """A "paused" state older than STALE_THROTTLE_HOURS must not sit deadlocked
+    until the next scheduled apply_throttles() run — compute() (called by the
+    dashboard on every poll) re-evaluates it immediately."""
+    import json
+    from datetime import datetime, timedelta
+
+    from src.analytics.strategy_scorecard import IST
+
+    monkeypatch.chdir(tmp_path)
+    stale_ts = (datetime.now(IST) - timedelta(hours=13)).isoformat()
+    THROTTLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    THROTTLE_FILE.write_text(json.dumps(
+        {"LIVE_FORCED": {"mode": "paused", "pf": 0.2, "updated": stale_ts, "reason": "seed"}}))
+    # No current-era trades -> compute()'s re-eval should land on "probation".
+    EngineScorecard().compute()
+    saved = json.loads(THROTTLE_FILE.read_text())
+    assert saved["LIVE_FORCED"]["mode"] == "probation"
+
+
+def test_fresh_pause_not_reevaluated_on_compute(tmp_path, monkeypatch):
+    """A recently-updated "paused" state (< STALE_THROTTLE_HOURS) must be left
+    alone by compute() — only the scheduled apply_throttles() job (or a
+    genuinely stale state) should change it."""
+    import json
+    from datetime import datetime, timedelta
+
+    from src.analytics.strategy_scorecard import IST
+
+    monkeypatch.chdir(tmp_path)
+    fresh_ts = (datetime.now(IST) - timedelta(hours=1)).isoformat()
+    THROTTLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    THROTTLE_FILE.write_text(json.dumps(
+        {"LIVE_FORCED": {"mode": "paused", "pf": 0.2, "updated": fresh_ts, "reason": "seed"}}))
+    EngineScorecard().compute()
+    saved = json.loads(THROTTLE_FILE.read_text())
+    assert saved["LIVE_FORCED"]["mode"] == "paused"

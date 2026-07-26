@@ -235,6 +235,8 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
       <div class="sb-label">EXPECTANCY</div>
     </div>
   </div>
+  <div id="era-note" style="display:none;font-family:var(--font-body);font-size:13px;
+    color:var(--text-muted);margin:-12px 0 20px;padding:0 4px"></div>
 
   <div class="panel hud-strip">
     <span class="regime-emoji" id="regime-emoji">🚀</span>
@@ -242,6 +244,7 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     <span class="hud-metric" id="nifty-price">NIFTY —</span>
     <span class="hud-metric" id="rsi-value">RSI —</span>
     <span class="hud-metric" id="fii-dii-badge">🟡 FII/DII —</span>
+    <span class="funny-line" id="weekend-note" style="display:none"></span>
     <span class="funny-line" id="funny-line">Reading the market's mood...</span>
   </div>
 
@@ -250,7 +253,7 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     <div class="stat-tile"><div class="stat-tile__num" id="metric-wr">0%</div><div class="stat-tile__label">Win Rate</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-pnl">₹0</div><div class="stat-tile__label">Total P&amp;L</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-kb">0</div><div class="stat-tile__label">Patterns Learned</div></div>
-    <div class="stat-tile"><div class="stat-tile__num" id="metric-forced">0</div><div class="stat-tile__label">Forced Trades Today</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-forced">0</div><div class="stat-tile__label">Closed Today (all eras)</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-simwr">0%</div><div class="stat-tile__label">Sim Win Rate</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-xgb">0%</div><div class="stat-tile__label">XGBoost Progress</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-replay">0</div><div class="stat-tile__label">Replay Patterns</div></div>
@@ -826,6 +829,19 @@ function updateDashboard(d){
   document.getElementById('scoreboard')?.setAttribute('title',
     `Showing post-fix era only. All-time (incl. pre-fix era): ${ctAll.total||0} trades, `+
     `${(ctAll.win_rate||0).toFixed(1)}% WR`);
+  const eraNoteEl=document.getElementById('era-note');
+  if(eraNoteEl){
+    if((ct.total||0)===0&&(ctAll.total||0)>0){
+      const eraStart=d.era_start?new Date(d.era_start):null;
+      const eraStartStr=eraStart?eraStart.toLocaleString('en-IN',
+        {timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'recently';
+      eraNoteEl.style.display='block';
+      eraNoteEl.textContent=`🆕 New era started ${eraStartStr} after engine fix — awaiting first `+
+        `post-fix closes. All-time: ${ctAll.total} trades (${(ctAll.win_rate||0).toFixed(0)}% WR, pre-fix engine).`;
+    }else{
+      eraNoteEl.style.display='none';
+    }
+  }
   countUp(document.getElementById('sb-total'),ct.total||0,800);
   countUp(document.getElementById('sb-won'),ct.won||0,800);
   countUp(document.getElementById('sb-lost'),ct.lost||0,800);
@@ -861,6 +877,16 @@ function updateDashboard(d){
   document.getElementById('nifty-price').textContent='NIFTY ₹'+Number(nifty).toLocaleString('en-IN',{maximumFractionDigits:0});
   document.getElementById('rsi-value').textContent='RSI '+(d.nifty_rsi||0).toFixed(1);
   document.getElementById('funny-line').textContent=d.funny_line||'';
+
+  const weekendEl=document.getElementById('weekend-note');
+  if(weekendEl){
+    if(!d.market_open&&d.is_weekend){
+      weekendEl.style.display='inline';
+      weekendEl.textContent='🛌 Weekend — continuous learning only; live engines resume Monday 9:15';
+    }else{
+      weekendEl.style.display='none';
+    }
+  }
 
   updatePositions(d.positions||[]);
   if((d.pnl_history||[]).length)updatePnlChart(d.pnl_history);
@@ -921,7 +947,7 @@ function updateDashboard(d){
   if(scoreEl){
     const scorecard=d.engine_scorecard||{};
     const throttles=d.engine_throttles||{};
-    const modeIcon={throttled:'🐢 throttled',paused:'⏸ paused'};
+    const modeIcon={throttled:'🐢 throttled',paused:'⏸ paused',probation:'🩹 probation'};
     const rows=Object.entries(scorecard).map(([engine,s])=>{
       const mode=(throttles[engine]||{}).mode||'normal';
       const modeText=modeIcon[mode]||'';

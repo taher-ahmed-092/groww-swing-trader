@@ -815,6 +815,14 @@ class CommandHandler:
         sim_wr = round(sim_wins / sim_total * 100, 1) if sim_total else 0
 
         try:
+            from src.analytics.era import get_era_start
+
+            era_start_str = (datetime.fromisoformat(get_era_start())
+                             .strftime("%d %b %H:%M IST"))
+        except Exception:
+            era_start_str = "unknown"
+
+        try:
             pro = pa.get_professional_metrics()
         except Exception:
             pro = {"status": "no_data"}
@@ -915,6 +923,7 @@ class CommandHandler:
             f"P&L: ₹{summary.get('total_pnl_inr', 0):+.2f}\n\n"
 
             "*📐 Professional Metrics (all sources, net of costs)*\n"
+            f"_Era started {era_start_str}_\n"
             f"{pro_text}\n\n"
 
             "*⚡ Forced Learning (Today)*\n"
