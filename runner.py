@@ -219,6 +219,143 @@ def daily_premarket_job() -> None:
         console.print(f"[green][JOB] {symbol} → {result.get('status')}[/green]")
 
 
+def market_open_pairs_job() -> None:
+    """Mon-Fri 9:20 AM — attempt the best pairs-trading divergence through the
+    full pipeline right after open, before it compresses by the 10:30 guarantee."""
+    if _kill_switch() or _is_paused():
+        return
+    from src.data.market_calendar import NSECalendar
+
+    if not NSECalendar().is_market_open():
+        console.print("[yellow][JOB] market_open_pairs_job: market closed — skipping[/yellow]")
+        return
+
+    from src.data.regime_detector import RegimeDetector
+    from src.orchestrator.graph import build_graph
+    from src.strategies.pairs_trading import PairsTradingStrategy
+
+    notifier = TelegramNotifier()
+    opps = PairsTradingStrategy().find_opportunities()
+    if not opps:
+        console.print("[dim][JOB] market_open_pairs_job: no opportunities[/dim]")
+        return
+
+    best = opps[0]
+    console.print(
+        f"[cyan][JOB] market_open_pairs_job: {best['buy_symbol']} vs "
+        f"{best['pair_symbol']} z={best['z_score']:.2f}σ[/cyan]"
+    )
+
+    app = build_graph()
+    state = get_initial_state(best["buy_symbol"])
+    state["sector"] = best["sector"]
+    state["candidates"] = [{
+        "symbol": best["buy_symbol"],
+        "name": best["buy_symbol"],
+        "sector": best["sector"],
+        "score": 9,
+        "rationale": best["rationale"],
+        "flags": ["PAIRS_TRADE"],
+        "tier": "large",
+        "z_score": best["z_score"],
+        "pair_symbol": best["pair_symbol"],
+        "correlation": best["correlation"],
+        "entry_price": best["entry_price"],
+        "stop_price": best["stop_price"],
+        "target_price": best["target_price"],
+    }]
+    state["technical_verdict"] = {
+        "signal": "BUY",
+        "score": min(1.0, (best["z_score"] - 2.0) / 2.0 + 0.60),
+        "entry_price": best["entry_price"],
+        "stop_price": best["stop_price"],
+        "target_price": best["target_price"],
+        "proceed": True,
+        "strategy_name": "pairs_trading",
+        "reasoning": best["rationale"],
+    }
+    state["market_context"] = RegimeDetector().detect()
+
+    result = app.invoke(
+        state,
+        config={"configurable": {"thread_id": f"pairs-open-{best['buy_symbol']}"}},
+    )
+
+    trade = result.get("trade_result", {})
+    verdict = result.get("judge_verdict", {})
+
+    if trade.get("status") == "PAPER_FILLED":
+        notifier.send_message(
+            "🎯 *First Morning Trade*\n"
+            f"Pairs: {best['buy_symbol']} vs {best['pair_symbol']}\n"
+            f"Entry: ₹{trade.get('fill_price', 0):.2f}\n"
+            f"Stop: ₹{best['stop_price']:.2f}\n"
+            f"Target: ₹{best['target_price']:.2f}\n"
+            f"z-score: {best['z_score']:.2f}σ\n"
+            f"Judge: {verdict.get('overall_score', 0):.1f}/10"
+        )
+    else:
+        reasons = result.get("risk_check", {}).get("reasons", [])
+        console.print(f"[yellow][JOB] market_open_pairs_job rejected: {reasons}[/yellow]")
+
+
+def market_open_scan_job() -> None:
+    """Mon-Fri 9:25 AM — full scout scan; attempt the full pipeline on the top 5
+    candidates, stopping at the first PAPER_FILLED trade."""
+    if _kill_switch() or _is_paused():
+        return
+    from src.data.market_calendar import NSECalendar
+
+    if not NSECalendar().is_market_open():
+        console.print("[yellow][JOB] market_open_scan_job: market closed — skipping[/yellow]")
+        return
+
+    notifier = TelegramNotifier()
+    candidates = ScoutAgent().scan()[:5]
+    if not candidates:
+        console.print("[dim][JOB] market_open_scan_job: no candidates[/dim]")
+        return
+
+    ctx = MarketContext().get_nifty_context()
+    for cand in candidates:
+        symbol = cand["symbol"]
+        state = get_initial_state(symbol)
+        state["sector"] = cand.get("sector", "")
+        state["market_context"] = ctx
+        state["fundamental_verdict"] = FundamentalAgent().analyze(state)
+
+        technical = TechnicalAgent().analyze(state)
+        state["technical_verdict"] = technical
+        if not (technical.get("proceed") and (technical.get("score") or 0) >= LIMITS.min_confidence):
+            continue
+
+        judge = LLMJudge().evaluate(state)
+        state["judge_verdict"] = judge
+        if not judge.get("approved"):
+            continue
+
+        risk = RiskChecker().check(state)
+        state["risk_check"] = risk
+        if not risk.get("approved"):
+            continue
+
+        state["trade_decision"] = {
+            "symbol": symbol,
+            "order_type": "BUY",
+            "quantity": risk["quantity"],
+            "price": technical["entry_price"],
+            "stop_price": technical["stop_price"],
+            "target_price": technical["target_price"],
+        }
+        result = ExecutorAgent().execute(state)
+        console.print(f"[green][JOB] market_open_scan_job: {symbol} → {result.get('status')}[/green]")
+        if result.get("status") == "PAPER_FILLED":
+            notifier.send_trade_card(state)
+            return
+
+    console.print("[dim][JOB] market_open_scan_job: no candidate cleared the pipeline[/dim]")
+
+
 def daily_postmarket_job() -> None:
     if _kill_switch():
         return
@@ -917,6 +1054,8 @@ if __name__ == "__main__":
     scheduler = BackgroundScheduler(timezone=TZ)
     scheduler.add_job(weekly_research_job, "cron", day_of_week="sun", hour=19, minute=0)
     scheduler.add_job(daily_premarket_job, "cron", day_of_week="mon-fri", hour=9, minute=0)
+    scheduler.add_job(market_open_pairs_job, "cron", day_of_week="mon-fri", hour=9, minute=20)
+    scheduler.add_job(market_open_scan_job, "cron", day_of_week="mon-fri", hour=9, minute=25)
     scheduler.add_job(daily_learning_job, "cron", day_of_week="mon-fri", hour=16, minute=30)
     scheduler.add_job(daily_postmarket_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
     scheduler.add_job(weekly_distillation_job, "cron", day_of_week="sun", hour=20, minute=0)
