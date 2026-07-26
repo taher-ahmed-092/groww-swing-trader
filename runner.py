@@ -783,6 +783,29 @@ def continuous_sim_job() -> None:
         log.warning(msg)
 
 
+def watchlist_validation_job() -> None:
+    """Monthly (1st of month, 8am IST) — fetch-checks every watchlist symbol
+    against yfinance and Telegram-reports any NEWLY dead tickers (renamed or
+    delisted since the last run), so ticker rot gets caught before it silently
+    monopolizes continuous-sim batches (scripts/validate_watchlist.py)."""
+    if _kill_switch():
+        return
+    from scripts.validate_watchlist import validate_and_report_new_dead_tickers
+
+    try:
+        new_dead = validate_and_report_new_dead_tickers()
+    except Exception as exc:
+        console.print(f"[yellow][WATCHLIST-VALIDATE] failed: {exc}[/yellow]")
+        return
+    if new_dead:
+        msg = (f"⚠️ *Watchlist ticker check*: {len(new_dead)} newly dead ticker(s) — "
+               f"{', '.join(new_dead)}. Verify renames/delistings in src/data/watchlist.py.")
+        console.print(f"[yellow][WATCHLIST-VALIDATE] {msg}[/yellow]")
+        TelegramNotifier().send_message(msg)
+    else:
+        console.print("[green][WATCHLIST-VALIDATE] no newly dead tickers[/green]")
+
+
 def drift_check_job() -> None:
     """Every 6 hours — detect win-rate/pattern/regime drift and auto-adapt
     (confidence decay + auto-rule regeneration) if found."""
@@ -918,6 +941,7 @@ if __name__ == "__main__":
     scheduler.add_job(continuous_sim_job, "cron", minute="*/30")
     scheduler.add_job(drift_check_job, "cron", hour="*/6")
     scheduler.add_job(triday_health_check_job, "cron", day="*/3", hour=20, minute=0)
+    scheduler.add_job(watchlist_validation_job, "cron", day=1, hour=8, minute=0)
     scheduler.add_job(nightly_engine_scorecard_job, "cron", hour=23, minute=15)
     scheduler.start()
 

@@ -115,6 +115,7 @@ class IntradaySimulator:
                 "target": target,
                 "entry_time": datetime.now(IST).isoformat(),
                 "regime": regime_name,
+                "market_regime": regime_name,
                 "rsi_at_entry": round(rsi, 1),
                 "trend_at_entry": trend,
                 "adx_at_entry": adx,

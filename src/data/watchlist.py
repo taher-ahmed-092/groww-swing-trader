@@ -28,7 +28,8 @@ LARGE_CAP = {
     "BAJAJFINSV": "Finance", "BAJAJ-AUTO": "Auto", "HEROMOTOCO": "Auto",
     "TATACONSUM": "FMCG", "BRITANNIA": "FMCG", "NESTLEIND": "FMCG",
     "INDUSINDBK": "Banking", "BPCL": "Energy", "HINDALCO": "Metals",
-    "APOLLOHOSP": "Healthcare", "EICHERMOT": "Auto", "TATAMOTORS": "Auto",
+    "APOLLOHOSP": "Healthcare", "EICHERMOT": "Auto",
+    "TMPV": "Auto",  # TATAMOTORS demerged 2024; commercial-vehicle listing renamed TMPV on NSE
 }
 
 # Nifty Midcap 100 — higher opportunity, more volatility
@@ -41,7 +42,10 @@ MID_CAP = {
     "EMAMILTD": "FMCG", "ESCORTS": "Auto", "EXIDEIND": "Auto",
     "FEDERALBNK": "Banking", "GLAND": "Pharma", "GNFC": "Chemicals",
     "GODREJCP": "FMCG", "GODREJPROP": "Real Estate", "GRANULES": "Pharma",
-    "GSPL": "Energy", "HFCL": "Telecom", "IDFCFIRSTB": "Banking",
+    "HFCL": "Telecom", "IDFCFIRSTB": "Banking",
+    # GSPL removed: yfinance returns "possibly delisted; no price data found"
+    # for GSPL.NS as of 2026-07-26; no working alternate ticker found
+    # (GUJSTATE.NS also 404s) — verify manually before re-adding.
     "IEX": "Energy", "IIFL": "Finance", "INDIAMART": "Technology",
     "INDIGO": "Aviation", "JKCEMENT": "Cement", "JUBLFOOD": "Consumer",
     "KANSAINER": "Consumer", "LICHSGFIN": "Finance", "LICI": "Finance",
@@ -50,7 +54,8 @@ MID_CAP = {
     "MPHASIS": "IT", "MRF": "Auto", "NAVINFLUOR": "Chemicals",
     "NMDC": "Metals", "OFSS": "IT", "PAGEIND": "Consumer",
     "PERSISTENT": "IT", "PETRONET": "Energy", "PFIZER": "Pharma",
-    "PHOENIX": "Real Estate", "PIDILITIND": "Chemicals", "PIIND": "Chemicals",
+    "PHOENIXLTD": "Real Estate",  # renamed from PHOENIX on NSE
+    "PIDILITIND": "Chemicals", "PIIND": "Chemicals",
     "PNB": "Banking", "POLYCAB": "Engineering", "POONAWALLA": "Finance",
     "PRESTIGE": "Real Estate", "RAMCOCEM": "Cement", "RECLTD": "Finance",
     "SAIL": "Metals", "SBICARD": "Finance", "SBILIFE": "Finance",
@@ -62,7 +67,7 @@ MID_CAP = {
     "TVSMOTOR": "Auto", "UBL": "FMCG",
     "UNIONBANK": "Banking", "UNOMINDA": "Auto", "UPL": "Chemicals",
     "VEDL": "Metals", "VBL": "FMCG", "VOLTAS": "Engineering",
-    "WHIRLPOOL": "Consumer", "ZOMATO": "Technology",
+    "WHIRLPOOL": "Consumer", "ETERNAL": "Technology",  # renamed from ZOMATO on NSE (2025)
     "NYKAA": "Consumer",
 }
 
@@ -76,20 +81,28 @@ SMALL_CAP = {
     "CANFINHOME": "Finance", "CAPLIPOINT": "Pharma", "CARERATING": "Finance",
     "CERA": "Consumer", "CLEAN": "Energy", "CRAFTSMAN": "Engineering",
     "DATAMATICS": "IT", "DCMSHRIRAM": "Chemicals", "DHANUKA": "Chemicals",
-    "EIDPARRY": "FMCG", "ELECON": "Engineering", "ELGIRUBBER": "Auto",
+    "EIDPARRY": "FMCG", "ELECON": "Engineering",
+    # ELGIRUBBER removed: yfinance 404s ELGIRUBBER.NS as of 2026-07-26;
+    # no working alternate ticker found (ELGI.NS also 404s) — verify
+    # manually before re-adding.
     "EPIGRAL": "Chemicals", "FINEORG": "Chemicals", "FORCEMOT": "Auto",
     "GABRIEL": "Auto", "GESHIP": "Infra", "GHCL": "Chemicals",
     "GMMPFAUDLR": "Engineering", "GPPL": "Infra", "GRINDWELL": "Engineering",
     "GUJGASLTD": "Energy", "HAPPSTMNDS": "IT", "HLEGLAS": "Consumer",
     "INGERRAND": "Engineering", "INTELLECT": "IT", "IOB": "Banking",
-    "IOLCP": "Chemicals", "IRCON": "Infra", "ITDCEM": "Infra",
+    "IOLCP": "Chemicals", "IRCON": "Infra",
+    # ITDCEM removed: yfinance 404s ITDCEM.NS as of 2026-07-26; no working
+    # alternate ticker found (ITDCEMENT.NS also 404s) — verify manually
+    # before re-adding.
     "JBCHEPHARM": "Pharma", "JKPAPER": "Consumer", "JLHL": "Healthcare",
     "JSWENERGY": "Energy", "KALYANKJIL": "Consumer", "KFINTECH": "Finance",
     "KIRLOSENG": "Engineering", "KRBL": "FMCG", "KSCL": "Chemicals",
     "LATENTVIEW": "IT", "LEMONTREE": "Consumer", "LINDEINDIA": "Chemicals",
     "LUXIND": "Consumer", "MANAPPURAM": "Finance", "MAZDOCK": "Engineering",
-    "MEDPLUS": "Healthcare", "MIDHANI": "Engineering", "MOLD-TEK": "Consumer",
-    "MTAR": "Engineering", "NATCOPHARM": "Pharma", "NBCC": "Infra",
+    "MEDPLUS": "Healthcare", "MIDHANI": "Engineering",
+    "MOLDTKPAC": "Consumer",  # renamed from MOLD-TEK on NSE
+    "MTARTECH": "Engineering",  # renamed from MTAR on NSE
+    "NATCOPHARM": "Pharma", "NBCC": "Infra",
     "NCLIND": "Chemicals", "NOCIL": "Chemicals", "NUVAMA": "Finance",
     "OLECTRA": "Auto", "ORIENTELEC": "Consumer", "PARADEEP": "Chemicals",
     "PARAS": "Healthcare", "PCJEWELLER": "Consumer", "PENIND": "Metals",
@@ -99,13 +112,15 @@ SMALL_CAP = {
     "SHYAMMETL": "Metals", "SIGNATURE": "Real Estate", "SKIPPER": "Infra",
     "SMSPHARMA": "Pharma", "SOBHA": "Real Estate", "SOLARA": "Pharma",
     "SPANDANA": "Finance", "SPIC": "Chemicals", "SUNTECK": "Real Estate",
-    "SUVENPHAR": "Pharma", "TANLA": "Technology", "TATACHEM": "Chemicals",
+    "COHANCE": "Pharma",  # renamed from SUVENPHAR (Suven Pharma -> Cohance Lifesciences merger)
+    "TANLA": "Technology", "TATACHEM": "Chemicals",
     "TEXRAIL": "Auto", "THYROCARE": "Healthcare", "TIMKEN": "Engineering",
     "TRIVENI": "Engineering", "UFLEX": "Consumer", "UJJIVANSFB": "Banking",
     "USHAMART": "Engineering", "UTIAMC": "Finance", "VAIBHAVGBL": "Consumer",
     "VARROC": "Auto", "VGUARD": "Consumer", "VIJAYA": "Finance",
     "VINATIORGA": "Chemicals", "VISHNU": "Chemicals", "VSTIND": "FMCG",
-    "WELSPUNIND": "Consumer", "WESTLIFE": "Consumer", "ZEEL": "Media",
+    "WELSPUNLIV": "Consumer",  # renamed from WELSPUNIND (Welspun Living) on NSE
+    "WESTLIFE": "Consumer", "ZEEL": "Media",
 }
 
 # Combined watchlist with tier information.

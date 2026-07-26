@@ -46,10 +46,13 @@ class RandomForestModel:
         """
         try:
             ind = record.get("indicators_snapshot", record.get("indicators", {})) or {}
-            rsi = ind.get("rsi_at_entry", ind.get("rsi_14", 50)) or 50
+            # Continuous-sim/forced-trade records (src/learning/continuous_simulator.py
+            # _simulate_window) store rsi/trend/adx as TOP-LEVEL keys with no nested
+            # indicators_snapshot dict at all, so fall back to the record itself.
+            rsi = ind.get("rsi_at_entry", ind.get("rsi_14", record.get("rsi", 50))) or 50
             adx_value = ind.get("adx_14", 0) or 0
-            adx_sig = ind.get("adx_at_entry", ind.get("adx_signal", "NEUTRAL")) or "NEUTRAL"
-            trend = ind.get("trend_at_entry", ind.get("trend", "SIDEWAYS")) or "SIDEWAYS"
+            adx_sig = ind.get("adx_at_entry", ind.get("adx_signal", record.get("adx", "NEUTRAL"))) or "NEUTRAL"
+            trend = ind.get("trend_at_entry", ind.get("trend", record.get("trend", "SIDEWAYS"))) or "SIDEWAYS"
             cmf = ind.get("cmf_20", 0) or 0
             tier = record.get("tier", "large") or "large"
             obv = ind.get("obv_trend", "NEUTRAL") == "RISING"
@@ -88,6 +91,11 @@ class RandomForestModel:
             "data/cache/forced_trades_history.json",
             "data/cache/intraday_sim_history.json",
             "data/cache/short_trades_history.json",
+            # forced_trades_history.json records carry no rsi/adx/trend fields at
+            # all (only a free-text "rationale" string) — continuous_sim_history.json
+            # is the only source that stores those as usable top-level values, so
+            # excluding it left rsi/adx with zero variance across the training set.
+            "data/cache/continuous_sim_history.json",
         ):
             p = Path(fname)
             if p.exists():

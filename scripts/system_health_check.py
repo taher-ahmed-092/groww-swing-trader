@@ -6,6 +6,7 @@ the /health_check Telegram command. Read-only: no trading logic touched.
 
     uv run python scripts/system_health_check.py
 """
+
 from __future__ import annotations
 
 import os
@@ -29,8 +30,7 @@ def check_all() -> dict:
         from src.data.fetcher import MarketDataFetcher
 
         df = MarketDataFetcher().get_price_history("RELIANCE", period="5d")
-        results["data_pipeline"] = {"ok": df is not None and len(df) > 0,
-                                    "rows": len(df) if df is not None else 0}
+        results["data_pipeline"] = {"ok": df is not None and len(df) > 0, "rows": len(df) if df is not None else 0}
     except Exception as e:
         results["data_pipeline"] = {"ok": False, "error": str(e)[:50]}
 
@@ -42,8 +42,11 @@ def check_all() -> dict:
         df = MarketDataFetcher().get_price_history("RELIANCE", period="1y")
         ind = compute_indicators(df)
         rsi = ind.get("rsi_14")
-        results["indicators"] = {"ok": rsi is not None and 0 < rsi < 100,
-                                 "rsi": rsi, "supertrend": ind.get("supertrend_direction")}
+        results["indicators"] = {
+            "ok": rsi is not None and 0 < rsi < 100,
+            "rsi": rsi,
+            "supertrend": ind.get("supertrend_direction"),
+        }
     except Exception as e:
         results["indicators"] = {"ok": False, "error": str(e)[:50]}
 
@@ -52,8 +55,11 @@ def check_all() -> dict:
         from src.agents.scout.agent import ScoutAgent
 
         candidates = ScoutAgent().scan()
-        results["scout"] = {"ok": len(candidates) > 0, "candidates": len(candidates),
-                            "top": candidates[0]["symbol"] if candidates else None}
+        results["scout"] = {
+            "ok": len(candidates) > 0,
+            "candidates": len(candidates),
+            "top": candidates[0]["symbol"] if candidates else None,
+        }
     except Exception as e:
         results["scout"] = {"ok": False, "error": str(e)[:50]}
 
@@ -62,8 +68,7 @@ def check_all() -> dict:
         from src.strategies.pairs_trading import PairsTradingStrategy
 
         opps = PairsTradingStrategy().find_opportunities()
-        results["pairs"] = {"ok": True, "opportunities": len(opps),
-                           "best_z": opps[0]["z_score"] if opps else 0}
+        results["pairs"] = {"ok": True, "opportunities": len(opps), "best_z": opps[0]["z_score"] if opps else 0}
     except Exception as e:
         results["pairs"] = {"ok": False, "error": str(e)[:50]}
 
@@ -73,12 +78,11 @@ def check_all() -> dict:
 
         j = TradingJournal()
         kb = j.get_active_knowledge(min_confidence=0.0)
-        wins = sum(1 for e in kb if "WON" in (e.pattern_description or "")
-                  or "WIN" in (e.pattern_description or ""))
-        losses = sum(1 for e in kb if "LOST" in (e.pattern_description or "")
-                    or "LOSS" in (e.pattern_description or ""))
-        results["knowledge_base"] = {"ok": len(kb) > 0, "total": len(kb),
-                                     "win_patterns": wins, "loss_patterns": losses}
+        wins = sum(1 for e in kb if "WON" in (e.pattern_description or "") or "WIN" in (e.pattern_description or ""))
+        losses = sum(
+            1 for e in kb if "LOST" in (e.pattern_description or "") or "LOSS" in (e.pattern_description or "")
+        )
+        results["knowledge_base"] = {"ok": len(kb) > 0, "total": len(kb), "win_patterns": wins, "loss_patterns": losses}
     except Exception as e:
         results["knowledge_base"] = {"ok": False, "error": str(e)[:50]}
 
@@ -89,8 +93,12 @@ def check_all() -> dict:
         rules = AutoRuleExtractor.load()
         results["auto_rules"] = {
             "ok": True,
-            "total": (len(rules.get("stock_vetoes", {})) + len(rules.get("stock_boosts", {}))
-                     + len(rules.get("setup_vetoes", [])) + len(rules.get("setup_boosts", []))),
+            "total": (
+                len(rules.get("stock_vetoes", {}))
+                + len(rules.get("stock_boosts", {}))
+                + len(rules.get("setup_vetoes", []))
+                + len(rules.get("setup_boosts", []))
+            ),
             "vetoes": len(rules.get("stock_vetoes", {})),
             "boosts": len(rules.get("stock_boosts", {})),
         }
@@ -102,9 +110,11 @@ def check_all() -> dict:
         from src.analytics.drift_detector import DriftDetector
 
         drift = DriftDetector().check_and_respond()
-        results["drift"] = {"ok": not drift.get("any_drift", False),
-                            "any_drift": drift.get("any_drift", False),
-                            "wr_drift": drift.get("wr_drift", {}).get("detected", False)}
+        results["drift"] = {
+            "ok": not drift.get("any_drift", False),
+            "any_drift": drift.get("any_drift", False),
+            "wr_drift": drift.get("wr_drift", {}).get("detected", False),
+        }
     except Exception as e:
         results["drift"] = {"ok": False, "error": str(e)[:50]}
 
@@ -116,9 +126,13 @@ def check_all() -> dict:
         from src.learning.continuous_simulator import ContinuousSimulator
 
         stats = ContinuousSimulator().get_stats()
-        results["continuous_sim"] = {"ok": stats["total"] > 0, "total": stats["total"],
-                                     "win_rate": stats["win_rate"],
-                                     "stocks_covered": stats["stocks_covered"]}
+        results["continuous_sim"] = {
+            "ok": stats["total"] > 0,
+            "total": stats["total"],
+            "win_rate": stats["win_rate"],
+            "stocks_covered": stats["stocks_covered"],
+            "quarantined": stats.get("quarantined", {}),
+        }
     except Exception as e:
         results["continuous_sim"] = {"ok": False, "error": str(e)[:50]}
 
@@ -146,8 +160,7 @@ def format_telegram_report(results: dict) -> str:
         ("Auto Rules", "auto_rules", lambda r: f"{r.get('total', 0)} rules"),
         ("Drift Check", "drift", lambda r: "DRIFT" if r.get("any_drift") else "stable"),
         ("Kill Switch", "kill_switch", lambda r: "ARMED" if r.get("active") else "ready"),
-        ("Continuous Sim", "continuous_sim",
-         lambda r: f"{r.get('total', 0)} sims ({r.get('win_rate', 0):.0f}% WR)"),
+        ("Continuous Sim", "continuous_sim", lambda r: f"{r.get('total', 0)} sims ({r.get('win_rate', 0):.0f}% WR)"),
     ]
 
     all_ok = True

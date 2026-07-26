@@ -113,6 +113,7 @@ class AlwaysOnTrader:
             if not trade:
                 continue
             trade.setdefault("regime", regime_name)
+            trade.setdefault("market_regime", regime_name)
             trades.append(trade)
             self._save_forced_trade(trade)
             # Historical sims close immediately → learn now. Live forced trades are

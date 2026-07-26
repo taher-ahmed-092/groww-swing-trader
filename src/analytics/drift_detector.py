@@ -31,6 +31,7 @@ DRIFT_HISTORY_FILE = Path("data/cache/drift_history.json")
 # check on genuinely sufficient evidence before declaring drift.
 MIN_TRADES_PER_WINDOW = 20   # each of the two 30-trade windows needs this many
 MIN_RECENT_MATCHES = 10      # pattern-drift sample floor (was 3 — too small)
+MIN_REGIME_TAGGED_RECORDS = 20  # regime-drift sample floor, post market_regime filter
 
 
 class DriftDetector:
@@ -145,12 +146,22 @@ class DriftDetector:
             current_regime = "UNKNOWN"
 
         all_sims = self._load_all_sims()
-        if len(all_sims) < 20:
-            return {"detected": False}
+
+        # `market_regime` is the market-wide category (RegimeDetector's
+        # BULL_TRENDING/BEAR_TRENDING/VOLATILE/RANGE_BOUND/RECOVERY/TRANSITIONAL),
+        # captured at record-write time. Records predating this field used
+        # "regime" to mean the stock-level trend (UPTREND/DOWNTREND) instead —
+        # a disjoint vocabulary — so legacy records are excluded rather than
+        # inferred/mapped, same as the insufficient-data guards elsewhere here.
+        tagged = [t for t in all_sims[-50:] if "market_regime" in t]
+        if len(tagged) < MIN_REGIME_TAGGED_RECORDS:
+            return {"detected": False,
+                    "reason": f"Insufficient market_regime-tagged data: only "
+                              f"{len(tagged)} records (need {MIN_REGIME_TAGGED_RECORDS})"}
 
         regime_counts: dict = defaultdict(int)
-        for t in all_sims[-50:]:
-            regime_counts[t.get("regime", "UNKNOWN")] += 1
+        for t in tagged:
+            regime_counts[t["market_regime"]] += 1
 
         dominant = max(regime_counts, key=regime_counts.get)
         dominant_pct = regime_counts[dominant] / sum(regime_counts.values())

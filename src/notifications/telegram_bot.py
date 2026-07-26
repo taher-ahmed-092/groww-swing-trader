@@ -23,6 +23,31 @@ console = Console()
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _POLL_INTERVAL_SECONDS = 5
 _EMOJIS = ["📊", "📈", "🎯", "💹", "🔔", "⚡", "🌟"]
+_MARKDOWN_ESCAPE_CHARS = ("_", "*", "`", "[")
+
+
+def escape_markdown(text: str) -> str:
+    """Escape Telegram legacy-Markdown special characters in a dynamic substring.
+
+    Only escapes characters that trigger Telegram's entity parser (`_`, `*`,
+    backtick, `[`) so free-form strings (engine names, pattern ids, etc.)
+    interpolated into a Markdown-formatted message can't break parsing.
+    """
+    if not text:
+        return text
+    escaped = text
+    for ch in _MARKDOWN_ESCAPE_CHARS:
+        escaped = escaped.replace(ch, f"\\{ch}")
+    return escaped
+
+
+def _is_parse_error(data: dict | None) -> bool:
+    """True if a Telegram API response failed specifically due to unparsable
+    Markdown entities (vs. a network error, bad chat_id, rate limit, etc.)."""
+    if not data:
+        return False
+    description = str(data.get("description", "")).lower()
+    return "can't parse entities" in description
 
 
 class TelegramNotifier:
@@ -58,6 +83,11 @@ class TelegramNotifier:
 
     # ── low-level ──────────────────────────────────────────────────────────────
     def _call(self, method: str, params: dict, timeout: int = 15) -> dict | None:
+        """POST to the Telegram Bot API. Returns the parsed JSON response.
+        On a non-ok response the raw dict (with `ok: False` and a
+        `description`) is returned rather than None, so callers can
+        distinguish a parse-entities error from other failures via
+        `_is_parse_error()`. On a transport/decode failure, returns None."""
         if not self.token:
             return None
         try:
@@ -66,7 +96,7 @@ class TelegramNotifier:
             data = resp.json()
             if not data.get("ok"):
                 console.print(f"[yellow][TELEGRAM] {method} not ok: {data.get('description')}[/yellow]")
-                return None
+                return data
             return data
         except (requests.RequestException, ValueError) as exc:
             console.print(f"[yellow][TELEGRAM] {method} failed: {exc}[/yellow]")
@@ -78,10 +108,13 @@ class TelegramNotifier:
             return False
         result = self._call("sendMessage", {"chat_id": self.chat_id, "text": text,
                                             "parse_mode": "Markdown"})
-        if result is None:
-            # Retry once without Markdown (a stray * / _ can make Telegram 400).
+        if _is_parse_error(result):
+            # Retry once without Markdown — only for a parse error (a stray
+            # * / _ made Telegram reject the entities). A network error or
+            # any other non-ok response (bad chat_id, rate limit, ...) would
+            # just fail identically again, so don't waste the request.
             result = self._call("sendMessage", {"chat_id": self.chat_id, "text": text})
-        return result is not None
+        return bool(result and result.get("ok"))
 
     def send_photo(self, image_bytes: bytes, caption: str = "") -> bool:
         if not self.enabled or not image_bytes:
@@ -161,33 +194,40 @@ class TelegramNotifier:
 
         f5 = round((fund.get("score", 0) or 0) * 5)
         t5 = round((tech.get("score", 0) or 0) * 5)
+        symbol_esc = escape_markdown(str(state.get("symbol", "")))
+        sector_esc = escape_markdown(str(state.get("sector", "")))
+        regime_esc = escape_markdown(str(state.get("market_context", {}).get("regime", ""))[:10])
+        summary_esc = escape_markdown(summary)
+        tier_esc = escape_markdown(str(sizing.get("confidence_tier", "")))
+        signal_esc = escape_markdown(str(tech.get("signal", "")))
+        gut_verdict_esc = escape_markdown(str(gut.get("gut_verdict", "")))
         lines = [
             f"{random.choice(_EMOJIS)} *TRADE PROPOSAL*",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            f"📌 *{state.get('symbol', '')}*  {state.get('sector', '')}  "
-            f"{str(state.get('market_context', {}).get('regime', ''))[:10]}",
+            f"📌 *{symbol_esc}*  {sector_esc}  "
+            f"{regime_esc}",
             f"{settings.mode_label}",
             "",
-            "🧠 *SUMMARY*", f"_{summary}_", "",
+            "🧠 *SUMMARY*", f"_{summary_esc}_", "",
             f"📊 *CONFIDENCE*  {bar}  *{score:.1f}/10*", "",
             f"💰 Entry: ₹{entry:,.2f}",
             f"🛑 Stop:  ₹{stop:,.2f}  _(-{pct(entry - stop):.1f}%)_",
             f"🎯 Target: ₹{target:,.2f}  _(+{pct(target - entry):.1f}%)_",
             f"📐 R:R 1:{rr:.1f}  💸 ₹{sizing.get('position_size_inr', 0):.0f}  "
-            f"_{sizing.get('confidence_tier', '')}_",
+            f"_{tier_esc}_",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
             f"📈 Fund  {'▓' * f5}{'░' * (5 - f5)}  {fund.get('score', 0) or 0:.2f}",
-            f"🔧 Tech  {'▓' * t5}{'░' * (5 - t5)}  {tech.get('score', 0) or 0:.2f}  [{tech.get('signal', '')}]",
+            f"🔧 Tech  {'▓' * t5}{'░' * (5 - t5)}  {tech.get('score', 0) or 0:.2f}  [{signal_esc}]",
             f"🧑‍⚖️ Judge  {score:.1f}/10",
-            f"🤔 Gut  {gut.get('gut_score', 0):.1f}/10  —  {gut.get('gut_verdict', '')}",
+            f"🤔 Gut  {gut.get('gut_score', 0):.1f}/10  —  {gut_verdict_esc}",
         ]
-        flags = [f for f in judge.get("flags", []) if f != "DEMO_MODE"]
+        flags = [escape_markdown(f) for f in judge.get("flags", []) if f != "DEMO_MODE"]
         lines.append(f"⚠️ Flags: {', '.join(flags[:3])}" if flags else "✅ No flags")
         if state.get("manually_requested"):
             lines.append("🔴 *MANUALLY REQUESTED — emotional check*")
         if tw.get("countdown_display"):
-            lines += ["", tw["countdown_display"]]
-        lines += ["", f"💡 _{tip}_",
+            lines += ["", escape_markdown(str(tw["countdown_display"]))]
+        lines += ["", f"💡 _{escape_markdown(tip)}_",
                   f"⏰ _Auto-rejects in {settings.auto_approve_timeout_seconds // 60}min_"]
         return "\n".join(lines)
 
@@ -209,10 +249,10 @@ class TelegramNotifier:
             "chat_id": self.chat_id, "text": text, "parse_mode": "Markdown",
             "reply_markup": keyboard,
         })
-        if result is None:  # Markdown fallback
+        if _is_parse_error(result):  # Markdown fallback — parse errors only, see send_message.
             result = self._call("sendMessage", {
                 "chat_id": self.chat_id, "text": text, "reply_markup": keyboard})
-        return str(result["result"]["message_id"]) if result else None
+        return str(result["result"]["message_id"]) if result and result.get("ok") else None
 
     # Backward-compatible name used by the executor node.
     def send_trade_card(self, state: TradeState) -> str | None:
