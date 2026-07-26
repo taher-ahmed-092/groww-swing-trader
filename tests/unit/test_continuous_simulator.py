@@ -71,6 +71,35 @@ def test_target_hit_before_stop():
     assert days == 2
 
 
+def test_run_batch_reports_counters_on_fetch_failure(tmp_path, monkeypatch):
+    """A batch where every symbol fails to fetch must report fetch_failures
+    (not just simulated=0) so the runner can distinguish 'quiet market' from
+    'network is down' instead of both looking like silent no-ops."""
+    monkeypatch.chdir(tmp_path)
+    sim = ContinuousSimulator()
+    monkeypatch.setattr(sim.fetcher, "get_price_history", lambda *a, **k: None)
+
+    result = sim.run_batch()
+
+    assert result["simulated"] == 0
+    assert result["fetch_failures"] == sim.BATCH_SIZE
+    assert result["windows_evaluated"] == 0
+    assert result["skipped_no_signal"] == 0
+
+
+def test_run_batch_reports_windows_evaluated(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    sim = ContinuousSimulator()
+    df = _make_df(120)
+    monkeypatch.setattr(sim.fetcher, "get_price_history", lambda *a, **k: df)
+
+    result = sim.run_batch()
+
+    assert result["windows_evaluated"] > 0
+    assert result["fetch_failures"] == 0
+    assert result["windows_evaluated"] == result["simulated"] + result["skipped_no_signal"]
+
+
 def test_statistical_guard_low_initial_conf(tmp_path, monkeypatch):
     """A brand-new pattern must never start near 'proven' confidence — a
     single data point is never treated as proof."""

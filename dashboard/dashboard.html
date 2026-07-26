@@ -297,6 +297,7 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
         <span class="legend-item"><span class="legend-swatch" style="background:#4dd8ff"></span>Forced</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#3ddc97"></span>Intraday</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#ff6ec7"></span>Short</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#a97dff"></span>Cont-Sim</span>
       </div>
       <div id="pnl-chart-wrap"><canvas id="pnl-chart" height="180"></canvas></div>
       <div class="wl-pattern" id="wl-pattern"></div>
@@ -666,7 +667,7 @@ function countUp(el,target,duration=1200,prefix='',suffix='',dec=0){
   requestAnimationFrame(frame);
 }
 
-const SOURCE_COLORS={real:'#ffd93d',forced:'#4dd8ff',intraday:'#3ddc97',short:'#ff6ec7',replay:'#c9c9d9'};
+const SOURCE_COLORS={real:'#ffd93d',forced:'#4dd8ff',intraday:'#3ddc97',short:'#ff6ec7',replay:'#c9c9d9',cont_sim:'#a97dff'};
 let pnlChart=null;
 function updatePnlChart(history){
   const wrap=document.getElementById('pnl-chart-wrap');
@@ -947,7 +948,7 @@ function updateDashboard(d){
   if(scoreEl){
     const scorecard=d.engine_scorecard||{};
     const throttles=d.engine_throttles||{};
-    const modeIcon={throttled:'🐢 throttled',paused:'⏸ paused',probation:'🩹 probation'};
+    const modeIcon={throttled:'🐢 throttled',paused:'⏸ paused',probation:'🩹 probation',retired:'🪦 retired'};
     const rows=Object.entries(scorecard).map(([engine,s])=>{
       const mode=(throttles[engine]||{}).mode||'normal';
       const modeText=modeIcon[mode]||'';
@@ -984,7 +985,8 @@ function updateDashboard(d){
     }
   }
 
-  const nextJob=(d.next_jobs&&d.next_jobs[0])?`${d.next_jobs[0].time} ${d.next_jobs[0].name}`:'None today';
+  const nj=(d.next_jobs&&d.next_jobs[0])||null;
+  const nextJob=nj?`${nj.day?nj.day+' ':''}${nj.time} ${nj.name}`:'None scheduled';
   document.getElementById('sb-mode').textContent=d.mode||'—';
   document.getElementById('sb-uptime').textContent=d.system_uptime||'—';
   document.getElementById('sb-next').textContent=nextJob;

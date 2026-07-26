@@ -776,10 +776,10 @@ class CommandHandler:
 
         from src.analytics.performance import PerformanceAnalyzer
         from src.data.regime_detector import RegimeDetector
+        from src.data.watchlist import ALL_STOCKS
         from src.learning.historical_replay import HistoricalReplayEngine
         from src.memory.journal import TradingJournal
         from src.trading.always_on_trader import AlwaysOnTrader
-        from src.data.watchlist import ALL_STOCKS
 
         j = TradingJournal()
         pa = PerformanceAnalyzer()
@@ -881,7 +881,7 @@ class CommandHandler:
             scorecard = EngineScorecard().compute()
             throttles = EngineScorecard._load_throttles()
             mode_icon = {"normal": "", "throttled": "🐢 throttled", "paused": "⏸ paused",
-                        "probation": "🩹 probation"}
+                        "probation": "🩹 probation", "retired": "🪦 retired"}
             score_lines = []
             for engine, stats in scorecard.items():
                 mode = throttles.get(engine, {}).get("mode", "normal")
@@ -895,8 +895,9 @@ class CommandHandler:
             scorecard_text = "  Unavailable"
 
         try:
-            from src.analytics.strategy_scorecard import ADAPTATION_LOG_FILE
             import json as _json3
+
+            from src.analytics.strategy_scorecard import ADAPTATION_LOG_FILE
 
             adaptation_history = (_json3.loads(ADAPTATION_LOG_FILE.read_text())
                                   if ADAPTATION_LOG_FILE.exists() else [])

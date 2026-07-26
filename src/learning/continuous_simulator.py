@@ -77,6 +77,7 @@ class ContinuousSimulator:
                             else self.DAYS_PER_STOCK)
 
         wins = losses = new_patterns = 0
+        windows_evaluated = skipped_no_signal = fetch_failures = 0
         sim_records: list[dict] = []
 
         for symbol in batch:
@@ -84,9 +85,11 @@ class ContinuousSimulator:
             try:
                 df = self.fetcher.get_price_history(symbol, period="6mo")
                 if df is None or len(df) < 60:
+                    fetch_failures += 1
                     continue
 
                 windows = self._pick_windows(len(df), windows_per_stock)
+                windows_evaluated += len(windows)
                 for window_end in windows:
                     result = self._simulate_window(symbol, tier, df, window_end)
                     if result:
@@ -97,6 +100,8 @@ class ContinuousSimulator:
                             losses += 1
                         if result.get("pattern_added"):
                             new_patterns += 1
+                    else:
+                        skipped_no_signal += 1
 
                 progress[symbol] = {
                     "last_sim": date.today().isoformat(),
@@ -105,6 +110,7 @@ class ContinuousSimulator:
                 }
                 time.sleep(0.3)  # respectful to yfinance
             except Exception as exc:
+                fetch_failures += 1
                 log.debug("Continuous sim failed for %s: %s", symbol, exc)
 
         self._save_progress(progress)
@@ -116,6 +122,9 @@ class ContinuousSimulator:
             "losses": losses,
             "new_patterns": new_patterns,
             "batch_symbols": batch,
+            "windows_evaluated": windows_evaluated,
+            "skipped_no_signal": skipped_no_signal,
+            "fetch_failures": fetch_failures,
         }
 
     def _pick_windows(self, df_len: int, n: int) -> list[int]:

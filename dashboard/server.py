@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -54,11 +54,30 @@ def _market_open(now: datetime) -> bool:
     return 9 * 60 + 15 <= mins <= 15 * 60 + 30
 
 
+_WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
 def _next_jobs(now: datetime, limit: int = 3) -> list[dict]:
-    """Upcoming scheduled jobs for the day (label + HH:MM IST)."""
+    """Upcoming scheduled jobs, searching across day boundaries so weekends
+    (and end-of-day) don't show "None today" — jobs only run Mon-Fri, so a
+    Friday-evening or weekend query rolls forward to the next Monday. Each
+    entry carries "day" (None for today, else the weekday abbreviation) so
+    the caller can render "Mon 09:00 Morning brief" for a cross-day job."""
     mins_now = now.hour * 60 + now.minute
-    upcoming = [{"time": f"{m // 60:02d}:{m % 60:02d}", "name": label}
-                for m, label in _DAILY_JOBS if m > mins_now]
+    upcoming: list[dict] = []
+    for offset in range(8):  # today + up to a full week ahead
+        day = now.date() + timedelta(days=offset)
+        if day.weekday() >= 5:  # jobs are Mon-Fri only
+            continue
+        for m, label in _DAILY_JOBS:
+            if offset == 0 and m <= mins_now:
+                continue
+            upcoming.append({
+                "time": f"{m // 60:02d}:{m % 60:02d}", "name": label,
+                "day": None if offset == 0 else _WEEKDAY_ABBR[day.weekday()],
+            })
+        if len(upcoming) >= limit:
+            break
     return upcoming[:limit]
 
 
@@ -318,7 +337,10 @@ def collect_dashboard_data() -> dict:
             fii_dii = FIIDIIFeed().get_latest()
             upcoming_events = EconomicCalendar().get_upcoming(14)
         except Exception:
-            fii_dii, upcoming_events = {}, []
+            # {"unavailable": True} (not bare {}) — a bare {} renders as a
+            # false "+0Cr" on the dashboard, indistinguishable from a genuine
+            # zero-flow day (audit finding).
+            fii_dii, upcoming_events = {"unavailable": True}, []
 
         try:
             from src.memory.auto_rules import AutoRuleExtractor

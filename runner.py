@@ -12,6 +12,7 @@ everything within a minute. Run:  uv run python runner.py
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -46,6 +47,7 @@ from src.orchestrator.state import get_initial_state
 from src.risk.checker import RiskChecker
 
 console = Console()
+log = logging.getLogger(__name__)
 
 _CANDIDATES_FILE = os.path.join("data", "cache", "weekly_candidates.json")
 _DISTILL_MARKER = os.path.join("data", "cache", "last_distill.txt")
@@ -366,7 +368,7 @@ def _run_engine_scorecard() -> None:
     if changes:
         lines = ["🧠 *Self-adjustment*"]
         for engine, c in changes.items():
-            icon = {"paused": "⏸", "throttled": "🐢", "normal": "▶️"}.get(c["new"], "")
+            icon = {"paused": "⏸", "throttled": "🐢", "normal": "▶️", "retired": "🪦"}.get(c["new"], "")
             lines.append(f"{icon} {engine} {c['old']} -> {c['new']} ({c['reason']})")
         console.print(f"[yellow][JOB] Engine scorecard changes: {changes}[/yellow]")
         TelegramNotifier().send_message("\n".join(lines))
@@ -765,11 +767,20 @@ def continuous_sim_job() -> None:
     from src.learning.continuous_simulator import ContinuousSimulator
 
     result = ContinuousSimulator().run_batch()
+    windows = result.get("windows_evaluated", 0)
+    skipped = result.get("skipped_no_signal", 0)
+    failures = result.get("fetch_failures", 0)
     if result["simulated"] > 0:
         console.print(
             f"[cyan][CONT-SIM] {result['simulated']} sims: "
             f"{result['wins']}W/{result['losses']}L, "
             f"{result['new_patterns']} new patterns[/cyan]")
+    elif windows > 0 and skipped >= windows:
+        console.print(f"[dim][CONT-SIM] {windows} windows, {skipped} skipped — quiet market[/dim]")
+    if failures > 0 and failures > len(result.get("batch_symbols", [])) / 2:
+        msg = f"[CONT-SIM] {failures} fetch failures — check network"
+        console.print(f"[yellow]{msg}[/yellow]")
+        log.warning(msg)
 
 
 def drift_check_job() -> None:

@@ -80,12 +80,21 @@ class AlwaysOnTrader:
 
         is_market_hours = self._is_market_hours(datetime.now(IST))
 
+        # HISTORICAL_SIM is retired (scorecard evidence: PF 0.31 pre-fix era,
+        # PF 0.21 post-fix, 62.6% noisy time-exits) — off-hours learning is
+        # ContinuousSimulator's job now (it already runs every 30 min,
+        # 24/7, on the same historical data with a proper 3:1 R:R). Its
+        # history file is kept for learning; no new HISTORICAL_SIM trades
+        # are placed off-hours.
+        if not is_market_hours:
+            return []
+
         # Meta-learning: an engine that's been consistently unprofitable over
         # real evidence gets its own entries throttled or paused — the system
         # adjusting its own behavior, not just pattern confidences.
         from src.analytics.strategy_scorecard import EngineScorecard
 
-        engine_name = "LIVE_FORCED" if is_market_hours else "HISTORICAL_SIM"
+        engine_name = "LIVE_FORCED"
         engine_mode = EngineScorecard.get_mode(engine_name)
         if engine_mode == "paused":
             return []
@@ -100,8 +109,7 @@ class AlwaysOnTrader:
         regime_name = self._current_regime()
         trades: list[dict] = []
         for _ in range(needed):
-            trade = (self._place_live_forced_trade() if is_market_hours
-                     else self._place_historical_simulation_trade())
+            trade = self._place_live_forced_trade()
             if not trade:
                 continue
             trade.setdefault("regime", regime_name)

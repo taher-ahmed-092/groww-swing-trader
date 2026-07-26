@@ -38,6 +38,15 @@ PROBATION_MIN_TRADES = 20
 # apply_throttles(), so nothing lifts the pause until the next scheduled run.
 STALE_THROTTLE_HOURS = 12
 
+# HISTORICAL_SIM is retired on scorecard evidence — PF 0.31 pre-fix era, PF
+# 0.21 post-fix, 62.6% noisy time-exits (audit finding). ContinuousSimulator
+# covers the same off-hours learning need with a proper 3:1 R:R. Its history
+# file stays for learning; always_on_trader.py no longer places new trades
+# through it. Kept as a scorecard row (not deleted) so the retirement remains
+# visible and auditable.
+RETIRED_ENGINES = {"HISTORICAL_SIM"}
+RETIREMENT_EVIDENCE = "PF 0.31 pre-fix era, PF 0.21 post-fix, 62.6% noisy time-exits"
+
 # Each engine's history source + how to identify its trades within that file.
 _ENGINE_SOURCES = {
     "LIVE_FORCED": ("data/cache/forced_trades_history.json",
@@ -131,6 +140,21 @@ class EngineScorecard:
             n = stats["n_trades"]
             pf = stats["profit_factor"]
             prev_mode = current.get(engine, {}).get("mode", "normal")
+
+            if engine in RETIRED_ENGINES:
+                if prev_mode != "retired":
+                    current[engine] = {
+                        "mode": "retired", "pf": pf,
+                        "updated": datetime.now(IST).isoformat(),
+                        "reason": f"retired — {RETIREMENT_EVIDENCE}",
+                    }
+                    changes[engine] = {"old": prev_mode, "new": "retired", "pf": pf,
+                                       "reason": RETIREMENT_EVIDENCE}
+                    log_adaptation(
+                        "retirement",
+                        f"{engine}: retired ({RETIREMENT_EVIDENCE})",
+                        f"PF={pf:.2f}, n_trades={n}, win_rate={stats['win_rate']:.0%}")
+                continue
 
             if n < PROBATION_MIN_TRADES:
                 new_mode = "probation"

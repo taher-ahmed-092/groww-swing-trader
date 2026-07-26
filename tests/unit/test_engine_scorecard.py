@@ -72,6 +72,33 @@ def test_get_mode_defaults_to_normal(tmp_path, monkeypatch):
     assert EngineScorecard.get_mode("LIVE_FORCED") == "normal"
 
 
+def test_historical_sim_is_retired(tmp_path, monkeypatch):
+    """HISTORICAL_SIM is retired on scorecard evidence regardless of its
+    current-era trade count or profit factor — always_on_trader.py no longer
+    places trades through it, but the row stays visible on the scorecard."""
+    monkeypatch.chdir(tmp_path)
+    p = Path("data/cache/forced_trades_history.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(
+        [{"outcome": "WIN", "pnl_pct": 1.0, "trade_type": "HISTORICAL_SIM"}] * 5))
+
+    changes = EngineScorecard().apply_throttles()
+
+    assert changes["HISTORICAL_SIM"]["new"] == "retired"
+    saved = json.loads(THROTTLE_FILE.read_text())
+    assert saved["HISTORICAL_SIM"]["mode"] == "retired"
+
+
+def test_retirement_logged_once(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    scorecard = EngineScorecard()
+    first = scorecard.apply_throttles()
+    assert "HISTORICAL_SIM" in first
+    # Second run: already retired, must not re-log the same retirement.
+    second = scorecard.apply_throttles()
+    assert "HISTORICAL_SIM" not in second
+
+
 def test_stale_pause_reevaluates_to_probation_on_compute(tmp_path, monkeypatch):
     """A "paused" state older than STALE_THROTTLE_HOURS must not sit deadlocked
     until the next scheduled apply_throttles() run — compute() (called by the

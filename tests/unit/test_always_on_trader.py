@@ -114,6 +114,18 @@ def test_loss_detection(monkeypatch):
     assert out["outcome"] == "LOSS" and out["exit"] == 90.0
 
 
+def test_historical_sim_retired_off_hours(tmp_path, monkeypatch):
+    """HISTORICAL_SIM is retired — off hours, ensure_daily_trades() must place
+    nothing (ContinuousSimulator covers off-hours learning now)."""
+    _tmp_files(tmp_path, monkeypatch)
+    trader = AlwaysOnTrader()
+    monkeypatch.setattr(trader, "_is_market_hours", lambda now: False)
+    monkeypatch.setattr(
+        trader, "_place_historical_simulation_trade",
+        lambda: (_ for _ in ()).throw(AssertionError("must not be called")))
+    assert trader.ensure_daily_trades() == []
+
+
 def test_knowledge_update_on_close(tmp_path):
     trader = AlwaysOnTrader()
     trader.journal = TradingJournal(db_path=str(tmp_path / "kb.db"))

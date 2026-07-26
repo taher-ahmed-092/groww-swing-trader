@@ -31,6 +31,7 @@ def load_all_trade_history(journal: TradingJournal | None = None) -> list[dict]:
         ("data/cache/forced_trades_history.json", "forced"),
         ("data/cache/intraday_sim_history.json", "intraday"),
         ("data/cache/short_trades_history.json", "short"),
+        ("data/cache/continuous_sim_history.json", "cont_sim"),
     ):
         p = Path(fname)
         if p.exists():
@@ -41,7 +42,7 @@ def load_all_trade_history(journal: TradingJournal | None = None) -> list[dict]:
                             "symbol": t.get("symbol", "?"), "pnl": t.get("pnl_pct", 0) or 0,
                             "gross_pnl": t.get("gross_pnl_pct", t.get("pnl_pct", 0)) or 0,
                             "outcome": t.get("outcome"), "source": source,
-                            "closed_at": t.get("closed_at", t.get("opened_at", "")),
+                            "closed_at": t.get("closed_at", t.get("simulated_at", t.get("opened_at", ""))),
                             "entry": t.get("entry"), "stop": t.get("stop"),
                         })
             except Exception:
