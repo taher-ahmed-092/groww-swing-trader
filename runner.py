@@ -42,7 +42,7 @@ from src.memory.journal import TradeRecord, TradingJournal
 from src.memory.rca import RootCauseAnalyzer
 from src.memory.reflection import PostTradeReflector
 from src.memory.weekly_distillation import WeeklyDistiller
-from src.notifications.telegram_bot import TelegramNotifier
+from src.notifications.telegram_bot import TelegramNotifier, escape_markdown
 from src.orchestrator.state import get_initial_state
 from src.risk.checker import RiskChecker
 
@@ -111,22 +111,12 @@ def _run_weekly_distillation_once() -> None:
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
-def weekly_research_job() -> None:
-    if _kill_switch() or _is_paused():
-        return
-    console.print("[cyan][JOB] weekly_research_job starting[/cyan]")
-    notifier = TelegramNotifier()
+def _build_weekly_candidates() -> list[dict]:
+    """Scout scan + fundamental hard-reject screen — the candidate list that
+    weekly_research_job persists to _CANDIDATES_FILE on its normal Sunday 7pm
+    schedule. Factored out so daily_premarket_job can run the identical
+    build inline when that file is missing or stale (Fix 6)."""
     screener = ScreenerScraper()
-
-    # Distill the week's learning into standing knowledge before scanning (Sunday).
-    _run_weekly_distillation_once()
-
-    should_pause, reason = PerformanceAnalyzer().should_pause_trading()
-    if should_pause:
-        notifier.send_message(f"⏸️ Skipping weekly scan — {reason}")
-        console.print(f"[yellow][JOB] paused: {reason}[/yellow]")
-        return
-
     candidates = ScoutAgent().scan()
     kept: list[dict] = []
     for cand in candidates:
@@ -144,7 +134,25 @@ def weekly_research_job() -> None:
     os.makedirs(os.path.dirname(_CANDIDATES_FILE), exist_ok=True)
     with open(_CANDIDATES_FILE, "w", encoding="utf-8") as f:
         json.dump(kept, f, indent=2, default=str)
+    return kept
 
+
+def weekly_research_job() -> None:
+    if _kill_switch() or _is_paused():
+        return
+    console.print("[cyan][JOB] weekly_research_job starting[/cyan]")
+    notifier = TelegramNotifier()
+
+    # Distill the week's learning into standing knowledge before scanning (Sunday).
+    _run_weekly_distillation_once()
+
+    should_pause, reason = PerformanceAnalyzer().should_pause_trading()
+    if should_pause:
+        notifier.send_message(f"⏸️ Skipping weekly scan — {reason}")
+        console.print(f"[yellow][JOB] paused: {reason}[/yellow]")
+        return
+
+    kept = _build_weekly_candidates()
     symbols = ", ".join(c["symbol"] for c in kept) or "none"
     notifier.send_message(f"📋 Weekly scan complete. Candidates: {symbols}. Watch these during the week.")
     console.print(f"[green][JOB] weekly scan saved {len(kept)} candidates: {symbols}[/green]")
@@ -169,11 +177,20 @@ def daily_premarket_job() -> None:
             notifier.send_message("⚠️ Groww token unhealthy — skipping live premarket job.")
             return
 
-    if not os.path.exists(_CANDIDATES_FILE):
-        console.print("[yellow][JOB] no weekly_candidates.json — skipping[/yellow]")
-        return
-    with open(_CANDIDATES_FILE, encoding="utf-8") as f:
-        candidates = json.load(f)
+    # Self-sufficiency (Fix 6): don't skip a whole day's pipeline just because
+    # the Sunday 7pm weekly scan never ran (or its output is stale past a
+    # week) — run a fresh scout scan inline instead.
+    stale = True
+    if os.path.exists(_CANDIDATES_FILE):
+        age_days = (time.time() - os.path.getmtime(_CANDIDATES_FILE)) / 86400
+        stale = age_days > 8
+    if stale:
+        console.print("[yellow][JOB] weekly_candidates.json missing/stale — "
+                      "running a fresh scout scan inline[/yellow]")
+        candidates = _build_weekly_candidates()
+    else:
+        with open(_CANDIDATES_FILE, encoding="utf-8") as f:
+            candidates = json.load(f)
     if not candidates:
         console.print("[yellow][JOB] empty candidate list — skipping[/yellow]")
         return
@@ -506,7 +523,10 @@ def _run_engine_scorecard() -> None:
         lines = ["🧠 *Self-adjustment*"]
         for engine, c in changes.items():
             icon = {"paused": "⏸", "throttled": "🐢", "normal": "▶️", "retired": "🪦"}.get(c["new"], "")
-            lines.append(f"{icon} {engine} {c['old']} -> {c['new']} ({c['reason']})")
+            lines.append(
+                f"{icon} {escape_markdown(engine)} {escape_markdown(str(c['old']))} -> "
+                f"{escape_markdown(str(c['new']))} ({escape_markdown(str(c['reason']))})"
+            )
         console.print(f"[yellow][JOB] Engine scorecard changes: {changes}[/yellow]")
         TelegramNotifier().send_message("\n".join(lines))
     else:
@@ -672,15 +692,17 @@ def _run_guarantee(label: str, target: int) -> None:
     taken = DailyTradeGuarantee().ensure_minimum_trades(target=target)
     notifier = TelegramNotifier()
     for t in taken:
+        symbol_esc = escape_markdown(str(t.get("symbol", "")))
+        strategy_esc = escape_markdown(str(t.get("strategy", "")))
         if t.get("outcome") == "executed":
             notifier.send_message(
-                f"📚 Learning trade placed: {t['symbol']} ({t['strategy']})\n"
+                f"📚 Learning trade placed: {symbol_esc} ({strategy_esc})\n"
                 "Paper trade for daily learning — full pipeline (judge + risk + stop)."
             )
         elif t.get("outcome") == "simulated":
             notifier.send_message(
-                f"🔬 No setup cleared the judge today — logged {t['symbol']} "
-                f"({t['strategy']}) as a simulation so the system still learns."
+                f"🔬 No setup cleared the judge today — logged {symbol_esc} "
+                f"({strategy_esc}) as a simulation so the system still learns."
             )
     console.print(f"[cyan][JOB] {label}: {len(taken)} guarantee action(s)[/cyan]")
 
@@ -1005,9 +1027,10 @@ def daily_forced_summary_job() -> None:
         kb_count = 0
     TelegramNotifier().send_message(
         "📊 *Daily Learning Summary*\n"
-        f"Forced trades: {summary['total']}\n"
-        f"{summary['wins']}W / {summary['losses']}L\n"
-        f"Win rate: {summary['win_rate']:.0f}%\n"
+        f"Opened today: {summary.get('opened_today', summary['total'])} · "
+        f"Closed today: {summary['total']} ({summary['wins']}W/{summary['losses']}L) · "
+        f"Currently open: {summary.get('currently_open', 0)}\n"
+        f"Win rate (closed): {summary['win_rate']:.0f}%\n"
         f"KB patterns: {kb_count}")
 
 
@@ -1027,6 +1050,15 @@ if __name__ == "__main__":
     console.print("[green]Dashboard only: uv run python scripts/run_dashboard.py[/green]")
     console.print("[green]Verify setup: uv run python scripts/verify_setup.py[/green]")
     console.print("[green]Press Ctrl+C to stop. KILL_SWITCH file halts all jobs immediately.[/green]")
+
+    try:
+        from src.risk.checker import check_capital_sanity
+
+        sanity = check_capital_sanity()
+        if not sanity.get("ok"):
+            console.print(f"[bold red]⚠️  {sanity['message']}[/bold red]")
+    except Exception as exc:
+        console.print(f"[yellow]Capital sanity check failed: {exc}[/yellow]")
 
     try:
         kb = TradingJournal().get_active_knowledge(min_confidence=0.0)

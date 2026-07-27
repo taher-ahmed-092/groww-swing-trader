@@ -26,9 +26,63 @@ from src.trading.modes import get_current_mode
 console = Console()
 log = logging.getLogger(__name__)
 
-DEFAULT_PORTFOLIO_VALUE_INR = 1500.0
+# Paper/demo only — live capital always comes from the broker, never here.
+DEFAULT_PORTFOLIO_VALUE_INR = settings.paper_capital_inr
 DAILY_LOSS_LIMIT_PCT = LIMITS.daily_loss_limit_pct
 DAILY_LOSS_HALT_FILE = Path("data/cache/daily_loss_halt.txt")
+
+
+# Representative large-cap sample for the startup capital sanity check — cheap
+# (few requests) rather than pricing all 200+ watchlist stocks on every boot.
+_SANITY_CHECK_SAMPLE = ["MRF", "TCS", "RELIANCE", "INFY", "BAJFINANCE", "MARUTI"]
+
+
+def check_capital_sanity(portfolio_value_inr: float = DEFAULT_PORTFOLIO_VALUE_INR,
+                          prices: dict | None = None) -> dict:
+    """Startup sanity check: can this capital size even 1 share of the most
+    expensive sampled stock at its max stop distance? If not, every trade on
+    that stock (and likely many others) is mathematically unrejectable — it
+    fails the risk-per-trade gate before sizing ever runs, silently, forever,
+    with no single log line calling out why. Root cause of the 2026-07
+    zero-real-trades incident: ₹1500 capital couldn't clear the 3% max-risk
+    gate for a single share of any large-cap stock. `prices` is injectable
+    for tests; in production it's fetched live over `_SANITY_CHECK_SAMPLE`."""
+    if prices is None:
+        try:
+            from src.data.fetcher import MarketDataFetcher
+
+            fetcher = MarketDataFetcher()
+            prices = {}
+            for symbol in _SANITY_CHECK_SAMPLE:
+                price = fetcher.get_current_price(symbol)
+                if price:
+                    prices[symbol] = price
+        except Exception:
+            return {"ok": True, "reason": "price lookup unavailable — skipped"}
+
+    if not prices:
+        return {"ok": True, "reason": "no priced sample stock to check"}
+
+    worst_symbol = max(prices, key=prices.get)
+    worst_price = prices[worst_symbol]
+
+    risk_inr = round(1 * worst_price * (LIMITS.stop_loss_pct / 100), 4)
+    max_risk_inr = portfolio_value_inr * (LIMITS.max_risk_per_trade_pct / 100)
+    if risk_inr <= max_risk_inr:
+        return {"ok": True, "worst_symbol": worst_symbol, "risk_inr": risk_inr,
+                "max_risk_inr": max_risk_inr}
+
+    min_viable_capital = round(risk_inr / (LIMITS.max_risk_per_trade_pct / 100), 2)
+    message = (
+        f"Paper capital ₹{portfolio_value_inr:,.0f} too small to size 1 share of "
+        f"{worst_symbol} (risk ₹{risk_inr:,.2f} > limit ₹{max_risk_inr:,.2f}). "
+        f"Minimum viable capital ≈ ₹{min_viable_capital:,.0f}."
+    )
+    log.warning(message)
+    console.print(f"[bold red][RISK] {message}[/bold red]")
+    return {"ok": False, "worst_symbol": worst_symbol, "risk_inr": risk_inr,
+            "max_risk_inr": max_risk_inr, "min_viable_capital": min_viable_capital,
+            "message": message}
 
 
 def is_daily_loss_halted() -> bool:

@@ -259,12 +259,24 @@ class HistoricalReplayEngine:
         return sorted(ALL_STOCKS.keys(), key=overdue_days, reverse=True)[:n]
 
     def _load_progress(self) -> dict:
-        if REPLAY_CACHE.exists():
+        if not REPLAY_CACHE.exists():
+            return {}
+        try:
+            progress = json.loads(REPLAY_CACHE.read_text())
+        except Exception:
+            return {}
+        stale = [sym for sym in progress if sym not in ALL_STOCKS]
+        if stale:
+            for sym in stale:
+                del progress[sym]
+            log.info("Pruned %d stale replay-progress symbols (removed/renamed watchlist "
+                      "entries): %s", len(stale), ", ".join(stale[:10]))
             try:
-                return json.loads(REPLAY_CACHE.read_text())
-            except Exception:
+                REPLAY_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                REPLAY_CACHE.write_text(json.dumps(progress))
+            except OSError:
                 pass
-        return {}
+        return progress
 
     def _update_progress(self, replayed: list[str]) -> None:
         progress = self._load_progress()
@@ -281,8 +293,9 @@ class HistoricalReplayEngine:
         progress = self._load_progress()
         replay_patterns = [e for e in self.journal.get_active_knowledge(min_confidence=0.0)
                            if e.category == "HISTORICAL_REPLAY"]
+        covered = min(len(progress), len(ALL_STOCKS))
         return {
-            "total_stocks_replayed": len(progress),
+            "total_stocks_replayed": covered,
             "replay_patterns_in_kb": len(replay_patterns),
-            "stocks_pending": max(0, len(ALL_STOCKS) - len(progress)),
+            "stocks_pending": max(0, len(ALL_STOCKS) - covered),
         }

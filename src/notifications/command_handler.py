@@ -928,8 +928,10 @@ class CommandHandler:
             f"{pro_text}\n\n"
 
             "*⚡ Forced Learning (Today)*\n"
-            f"{forced['wins']}W / {forced['losses']}L from {forced['total']} trades\n"
-            f"Win rate: {forced['win_rate']:.0f}%\n\n"
+            f"Opened today: {forced.get('opened_today', forced['total'])} · "
+            f"Closed today: {forced['total']} ({forced['wins']}W/{forced['losses']}L) · "
+            f"Currently open: {forced.get('currently_open', 0)}\n"
+            f"Win rate (closed): {forced['win_rate']:.0f}%\n\n"
 
             "*⚡ Forced Learning (All Time)*\n"
             f"{forced_wins_all}W / {forced_total_all - forced_wins_all}L "

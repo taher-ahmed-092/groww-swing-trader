@@ -2,7 +2,7 @@
 Portfolio ledger backed by SQLite via SQLModel.
 
 Tracks capital, deployment, realized P&L, and a compounding factor. Single-row
-state table (one portfolio). Starting float: ₹1500 (3 × ₹500 trades).
+state table (one portfolio). Starting float: settings.PAPER_CAPITAL_INR (default ₹100,000).
 
 DB: data/journal/portfolio.db
 """
@@ -14,6 +14,8 @@ from typing import Optional
 
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
+from config.settings import settings
+
 _DB_DIR = os.path.join("data", "journal")
 _DB_PATH = os.path.join(_DB_DIR, "portfolio.db")
 
@@ -22,11 +24,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _default_capital() -> float:
+    # Paper/demo only — live capital always comes from the broker.
+    return settings.paper_capital_inr
+
+
 class PortfolioState(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    total_capital: float = 1500.0
+    total_capital: float = Field(default_factory=_default_capital)
     deployed_capital: float = 0.0
-    free_capital: float = 1500.0
+    free_capital: float = Field(default_factory=_default_capital)
     closed_pnl: float = 0.0
     open_positions_count: int = 0
     compound_factor: float = 1.0
@@ -42,7 +49,8 @@ class PortfolioLedger:
     def _get_state(self, session: Session) -> Optional[PortfolioState]:
         return session.exec(select(PortfolioState).limit(1)).first()
 
-    def initialize(self, starting_capital: float = 1500.0) -> PortfolioState:
+    def initialize(self, starting_capital: float | None = None) -> PortfolioState:
+        starting_capital = starting_capital if starting_capital is not None else settings.paper_capital_inr
         with Session(self.engine) as session:
             state = self._get_state(session)
             if state is None:

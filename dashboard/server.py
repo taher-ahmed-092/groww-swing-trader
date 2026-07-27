@@ -227,7 +227,37 @@ def collect_dashboard_data() -> dict:
                 "stop": t.stop_price, "target": t.target_price, "pnl_pct": pnl,
                 "strategy": getattr(t, "strategy_name", "momentum"),
                 "days_held": (datetime.now() - t.executed_at).days if t.executed_at else 0,
+                "source": "real",
             })
+
+        # The Hangar previously showed only real pipeline positions, so it read
+        # "Scanning the skies..." even with dozens of forced learning trades
+        # open (they never touch the journal — see always_on_trader.py).
+        try:
+            from src.trading.always_on_trader import AlwaysOnTrader
+
+            for t in AlwaysOnTrader()._load_open_forced_trades():
+                entry = t.get("entry") or 0
+                current = fetcher.get_current_price(t.get("symbol", "")) or entry
+                pnl = round((current - entry) / entry * 100, 2) if entry else 0
+                opened_at = t.get("opened_at")
+                days_held = 0
+                if opened_at:
+                    try:
+                        from zoneinfo import ZoneInfo
+
+                        now_ist_local = datetime.now(ZoneInfo("Asia/Kolkata"))
+                        days_held = (now_ist_local - datetime.fromisoformat(opened_at)).days
+                    except Exception:
+                        days_held = 0
+                positions.append({
+                    "symbol": t.get("symbol", ""), "entry": entry, "current": current,
+                    "stop": t.get("stop"), "target": t.get("target"), "pnl_pct": pnl,
+                    "strategy": t.get("trade_type", "forced"),
+                    "days_held": days_held, "source": "forced",
+                })
+        except Exception:
+            pass
 
         all_trades = _load_all_trade_history(journal)
         current_era_trades, _all_time_trades = era.split_by_era(all_trades)

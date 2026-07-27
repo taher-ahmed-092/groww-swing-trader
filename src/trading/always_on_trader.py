@@ -173,15 +173,24 @@ class AlwaysOnTrader:
         return closed
 
     def get_todays_summary(self) -> dict:
+        """Closed-today counts (from history) plus opened-today and
+        currently-open counts (from the still-open file) — multi-day holds
+        stay OPEN for up to MAX_HOLD_DAYS, so a closed-only count reads 0
+        for most of the day despite dozens of positions having been opened."""
         history = self._load_history()
+        open_trades = self._load_open_forced_trades()
         today = datetime.now(IST).date().isoformat()
-        todays = [t for t in history if t.get("opened_at", "")[:10] == today]
-        wins = sum(1 for t in todays if t.get("outcome") == "WIN")
-        total = len(todays)
+        todays_closed = [t for t in history if t.get("opened_at", "")[:10] == today]
+        todays_open = [t for t in open_trades if t.get("opened_at", "")[:10] == today]
+        wins = sum(1 for t in todays_closed if t.get("outcome") == "WIN")
+        total = len(todays_closed)
         return {
             "total": total, "wins": wins, "losses": total - wins,
             "win_rate": round(wins / total * 100, 1) if total else 0,
-            "recent": todays[-5:],
+            "recent": todays_closed[-5:],
+            "opened_today": len(todays_open) + total,
+            "closed_today": total,
+            "currently_open": len(open_trades),
         }
 
     # ── live forced trade (market open) ──────────────────────────────────────

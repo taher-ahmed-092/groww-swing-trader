@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.memory.journal import TradingJournal
@@ -33,17 +33,38 @@ MIN_TRADES_PER_WINDOW = 20   # each of the two 30-trade windows needs this many
 MIN_RECENT_MATCHES = 10      # pattern-drift sample floor (was 3 — too small)
 MIN_REGIME_TAGGED_RECORDS = 20  # regime-drift sample floor, post market_regime filter
 
+# Audit finding: confidence decay fired at 00:00 and 06:00 the same day (43
+# and 42 patterns), then read "stable" later — decaying ~40 patterns twice in
+# 6h means no pattern can ever accumulate confidence. One decay per 24h max.
+DECAY_COOLDOWN_HOURS = 24
+# A transient dip inside a 30-trade rolling window is noise at this trade
+# volume; require the WR drop to persist across 2 consecutive checks (this
+# call and the one immediately prior) before it triggers a decay.
+
+
+DECAY_STATE_FILE = Path("data/cache/drift_decay_state.json")
+
 
 class DriftDetector:
     def __init__(self) -> None:
         self.journal = TradingJournal()
 
     def check_and_respond(self) -> dict:
-        """Runs all drift checks; if any fired, decays confidence, regenerates
-        auto-rules, and logs the result. Returns the full results dict plus
-        `any_drift`."""
+        """Runs all drift checks; if a genuine (non-transient, non-cooldown)
+        drift fired, decays confidence, regenerates auto-rules, and logs the
+        result. Returns the full results dict plus `any_drift`.
+
+        WR-drift requires 2 consecutive detections (this check + the prior
+        one) before it counts as confirmed — a single 30-trade rolling-window
+        dip is noise at this trade volume. Pattern/regime drift fire on the
+        first detection (they're already gated on their own sample floors).
+        Confidence decay itself is cooled down to at most once per 24h
+        regardless of how many checks fire in that window — audit finding:
+        decaying ~40 patterns twice in 6h prevented any pattern from ever
+        accumulating confidence."""
+        wr_drift = self._check_wr_drift()
         results = {
-            "wr_drift": self._check_wr_drift(),
+            "wr_drift": wr_drift,
             "pattern_drift": self._check_pattern_drift(),
             "regime_drift": self._check_regime_drift(),
             "timestamp": datetime.now().isoformat(),
@@ -54,18 +75,59 @@ class DriftDetector:
             (results["wr_drift"], results["pattern_drift"], results["regime_drift"])
         )
 
-        if any_drift:
-            self._apply_confidence_decay()
-            try:
-                from src.memory.auto_rules import AutoRuleExtractor
+        state = self._load_decay_state()
+        wr_streak = state.get("consecutive_wr_drift", 0) + 1 if wr_drift.get("detected") else 0
+        state["consecutive_wr_drift"] = wr_streak
+        wr_confirmed = wr_streak >= 2
+        results["wr_drift"]["confirmed"] = wr_confirmed
 
-                AutoRuleExtractor().extract_and_save()
-            except Exception:
-                pass
+        decay_trigger = (wr_confirmed or results["pattern_drift"].get("detected")
+                          or results["regime_drift"].get("detected"))
+
+        if any_drift:
             self._log_drift(results)
 
+        if decay_trigger:
+            if self._decay_on_cooldown(state):
+                results["decay_skipped_cooldown"] = True
+            else:
+                self._apply_confidence_decay()
+                try:
+                    from src.memory.auto_rules import AutoRuleExtractor
+
+                    AutoRuleExtractor().extract_and_save()
+                except Exception:
+                    pass
+                state["last_decay_at"] = datetime.now().isoformat()
+
+        self._save_decay_state(state)
         results["any_drift"] = any_drift
         return results
+
+    def _load_decay_state(self) -> dict:
+        if DECAY_STATE_FILE.exists():
+            try:
+                return json.loads(DECAY_STATE_FILE.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def _save_decay_state(self, state: dict) -> None:
+        try:
+            DECAY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            DECAY_STATE_FILE.write_text(json.dumps(state))
+        except OSError:
+            pass
+
+    def _decay_on_cooldown(self, state: dict) -> bool:
+        last_decay_at = state.get("last_decay_at")
+        if not last_decay_at:
+            return False
+        try:
+            elapsed = datetime.now() - datetime.fromisoformat(last_decay_at)
+        except Exception:
+            return False
+        return elapsed < timedelta(hours=DECAY_COOLDOWN_HOURS)
 
     # ── checks ───────────────────────────────────────────────────────────────
     def _check_wr_drift(self) -> dict:

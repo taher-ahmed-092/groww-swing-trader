@@ -121,8 +121,16 @@ def test_confidence_decay_applied(tmp_path, monkeypatch):
         observed_count=15,
     ))
 
+    # WR-drift now requires 2 consecutive detections before it's "confirmed"
+    # (a single 30-trade rolling-window dip is noise at this trade volume —
+    # see test_drift_decay_cooldown.py) — the first call only builds the streak.
+    first = detector.check_and_respond()
+    assert first["any_drift"] is True
+    assert first["wr_drift"]["confirmed"] is False
+
     results = detector.check_and_respond()
     assert results["any_drift"] is True
+    assert results["wr_drift"]["confirmed"] is True
 
     kb = detector.journal.get_active_knowledge(min_confidence=0.0)
     entry = next(e for e in kb if e.pattern_id == "test-pattern")

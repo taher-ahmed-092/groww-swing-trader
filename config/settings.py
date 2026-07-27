@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     max_trade_value_inr: float = Field(default=500.0)
     min_confidence: float = Field(default=0.80)
 
+    # Paper/demo starting capital (INR) — realistic Indian retail swing account.
+    # Root-cause fix: the old ₹1500 default couldn't size even 1 share of most
+    # large/mid-cap stocks within the 3% max-risk-per-trade limit (e.g. 1 share
+    # of a ₹1040 stock with a 7% stop risks ₹72 > ₹45 = 3% of ₹1500), so every
+    # real pipeline trade was rejected before sizing. Live mode NEVER uses this —
+    # live capital always comes from the broker (see RiskChecker/live executor).
+    paper_capital_inr: float = Field(default=100000.0)
+
     @property
     def has_groww_credentials(self) -> bool:
         return all([self.groww_api_key, self.groww_api_secret, self.groww_access_token])

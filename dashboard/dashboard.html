@@ -254,6 +254,7 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     <div class="stat-tile"><div class="stat-tile__num" id="metric-pnl">₹0</div><div class="stat-tile__label">Total P&amp;L</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-kb">0</div><div class="stat-tile__label">Patterns Learned</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-forced">0</div><div class="stat-tile__label">Closed Today (all eras)</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-open-positions">0</div><div class="stat-tile__label">Open Positions</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-simwr">0%</div><div class="stat-tile__label">Sim Win Rate</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-xgb">0%</div><div class="stat-tile__label">XGBoost Progress</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-replay">0</div><div class="stat-tile__label">Replay Patterns</div></div>
@@ -867,6 +868,7 @@ function updateDashboard(d){
   countUp(document.getElementById('metric-pnl'),s.total_pnl_inr||0,1200,'₹','',2);
   countUp(document.getElementById('metric-kb'),(d.knowledge||[]).length,800);
   countUp(document.getElementById('metric-forced'),forced.total||0,600);
+  countUp(document.getElementById('metric-open-positions'),(d.positions||[]).length,600);
   countUp(document.getElementById('metric-simwr'),intra.win_rate||0,600,'','%',0);
   countUp(document.getElementById('metric-xgb'),learning.xgboost_progress||0,600,'','%',0);
   countUp(document.getElementById('metric-replay'),learning.replay_patterns||0,600);
