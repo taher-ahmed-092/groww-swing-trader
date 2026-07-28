@@ -217,17 +217,30 @@ def collect_dashboard_data() -> dict:
         knowledge = journal.get_active_knowledge(min_confidence=0.3)
         fetcher = MarketDataFetcher()
 
+        from src.data.watchlist import ALL_STOCKS
+
         positions = []
         for t in open_trades:
             price = fetcher.get_current_price(t.symbol)
             entry = t.entry_price or 0
             pnl = round((price - entry) / entry * 100, 2) if (price and entry) else 0
+            entry_snapshot = None
+            try:
+                import json as _json0
+
+                entry_snapshot = _json0.loads(t.state_snapshot or "{}").get("entry_snapshot")
+            except Exception:
+                pass
             positions.append({
                 "symbol": t.symbol, "entry": entry, "current": price or entry,
                 "stop": t.stop_price, "target": t.target_price, "pnl_pct": pnl,
                 "strategy": getattr(t, "strategy_name", "momentum"),
                 "days_held": (datetime.now() - t.executed_at).days if t.executed_at else 0,
+                "opened_at": t.executed_at.isoformat() if t.executed_at else None,
                 "source": "real",
+                "tier": ALL_STOCKS.get(t.symbol, {}).get("tier", "large"),
+                "score": t.confidence,
+                "entry_snapshot": entry_snapshot,
             })
 
         # The Hangar previously showed only real pipeline positions, so it read
@@ -254,7 +267,10 @@ def collect_dashboard_data() -> dict:
                     "symbol": t.get("symbol", ""), "entry": entry, "current": current,
                     "stop": t.get("stop"), "target": t.get("target"), "pnl_pct": pnl,
                     "strategy": t.get("trade_type", "forced"),
-                    "days_held": days_held, "source": "forced",
+                    "days_held": days_held, "opened_at": opened_at, "source": "forced",
+                    "tier": t.get("tier") or ALL_STOCKS.get(t.get("symbol", ""), {}).get("tier", "large"),
+                    "score": t.get("signal_score"),
+                    "entry_snapshot": t.get("entry_snapshot"),
                 })
         except Exception:
             pass
@@ -363,7 +379,7 @@ def collect_dashboard_data() -> dict:
         kb = [{"description": e.pattern_description[:60], "confidence": round(e.confidence, 2),
                "category": e.category, "is_hypothesis": e.is_hypothesis,
                "count": e.observed_count, "id": e.pattern_id,
-               "icon": _KB_ICONS.get(e.category, "🧠")} for e in knowledge[:8]]
+               "icon": _KB_ICONS.get(e.category, "🧠")} for e in knowledge[:12]]
 
         try:
             from src.memory.adaptive_thresholds import AdaptiveThresholds
@@ -443,11 +459,32 @@ def collect_dashboard_data() -> dict:
             engine_scorecard = EngineScorecard().compute()
             engine_throttles = EngineScorecard._load_throttles()
             last_adaptation = None
+            adaptation_log = []
             if ADAPTATION_LOG_FILE.exists():
                 adaptation_history = _json.loads(ADAPTATION_LOG_FILE.read_text())
                 last_adaptation = adaptation_history[-1] if adaptation_history else None
+                adaptation_log = adaptation_history[-6:][::-1]
         except Exception:
-            engine_scorecard, engine_throttles, last_adaptation = {}, {}, None
+            engine_scorecard, engine_throttles, last_adaptation, adaptation_log = {}, {}, None, []
+
+        try:
+            from src.ml.calibration import CalibratedEnsemble
+
+            ensemble_status = CalibratedEnsemble.get_status()
+        except Exception:
+            ensemble_status = {"brier_scores": {}, "calibrated_models": [], "uncalibrated_models": []}
+
+        try:
+            regime_replay_stats = HistoricalReplayEngine().get_regime_replay_stats()
+        except Exception:
+            regime_replay_stats = {}
+
+        try:
+            manual_vetoes_file = Path("data/cache/manual_vetoes.json")
+            manual_vetoes = (_json.loads(manual_vetoes_file.read_text())
+                             if manual_vetoes_file.exists() else [])
+        except Exception:
+            manual_vetoes = []
 
         now_ist = datetime.now(IST)
         data = {
@@ -502,6 +539,10 @@ def collect_dashboard_data() -> dict:
             "engine_scorecard": engine_scorecard,
             "engine_throttles": engine_throttles,
             "last_adaptation": last_adaptation,
+            "adaptation_log": adaptation_log,
+            "ensemble_status": ensemble_status,
+            "regime_replay_stats": regime_replay_stats,
+            "manual_vetoes": manual_vetoes,
             "kill_switch": Path("KILL_SWITCH").exists(),
         }
         return sanitize(data)
@@ -600,6 +641,83 @@ async def knowledge_detail(token: str, pattern_id: str):
         "regime": entry.observed_in_regime,
         "is_hypothesis": entry.is_hypothesis,
     }
+
+
+_ACTION_RESULTS: dict[str, dict] = {}
+
+
+def _run_action(action: str, action_id: str) -> None:
+    """Runs a triggered action in a background thread; result is polled via
+    GET /api/action_result/{token}/{action_id} rather than blocking the
+    triggering POST (scan/force_trade can take real network time)."""
+    try:
+        if action == "scan":
+            from src.agents.scout.agent import ScoutAgent
+
+            candidates = ScoutAgent().scan()
+            msg = f"{len(candidates)} candidate(s) found" if candidates else "No candidates found"
+        elif action == "force_trade":
+            from src.trading.always_on_trader import AlwaysOnTrader
+
+            trades = AlwaysOnTrader().ensure_daily_trades()
+            msg = f"{len(trades)} trade(s) placed" if trades else "No trade placed this call"
+        elif action == "report":
+            from src.notifications.telegram_bot import TelegramNotifier
+
+            TelegramNotifier().send_message(
+                "📊 Report requested from the dashboard — open Telegram and send /report "
+                "for the full breakdown.")
+            msg = "Report request sent to Telegram"
+        else:
+            msg = f"Unknown action: {action}"
+        _ACTION_RESULTS[action_id] = {"status": "done", "message": msg}
+    except Exception as exc:
+        _ACTION_RESULTS[action_id] = {"status": "error", "message": f"Error: {str(exc)[:80]}"}
+
+
+@app.post("/api/action/{token}/add_veto")
+async def add_veto(token: str, request: Request):
+    # Registered BEFORE the generic /api/action/{token}/{action} route below —
+    # Starlette matches routes in registration order, and {action} is a param
+    # segment that would otherwise swallow this literal "add_veto" path too.
+    if not verify_token(token):
+        raise HTTPException(status_code=401, detail="Invalid token.")
+    body = await request.json()
+    pattern_id = str(body.get("pattern_id", ""))[:120]
+    if not pattern_id:
+        raise HTTPException(status_code=400, detail="pattern_id required.")
+
+    import json as _json4
+
+    f = Path("data/cache/manual_vetoes.json")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    vetoes = _json4.loads(f.read_text()) if f.exists() else []
+    if pattern_id not in vetoes:
+        vetoes.append(pattern_id)
+        f.write_text(_json4.dumps(vetoes))
+    return {"status": "ok", "vetoed": pattern_id}
+
+
+@app.post("/api/action/{token}/{action}")
+async def trigger_action(token: str, action: str):
+    if not verify_token(token):
+        raise HTTPException(status_code=401, detail="Invalid token.")
+    if action not in ("scan", "force_trade", "report"):
+        raise HTTPException(status_code=400, detail="Unknown action.")
+    import threading
+    import uuid
+
+    action_id = uuid.uuid4().hex[:12]
+    _ACTION_RESULTS[action_id] = {"status": "running", "message": ""}
+    threading.Thread(target=_run_action, args=(action, action_id), daemon=True).start()
+    return {"status": "triggered", "action": action, "action_id": action_id}
+
+
+@app.get("/api/action_result/{token}/{action_id}")
+async def action_result(token: str, action_id: str):
+    if not verify_token(token):
+        raise HTTPException(status_code=401, detail="Invalid token.")
+    return _ACTION_RESULTS.get(action_id, {"status": "unknown", "message": ""})
 
 
 @app.get("/health")
