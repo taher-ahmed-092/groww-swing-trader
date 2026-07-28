@@ -822,14 +822,23 @@ class CommandHandler:
         forced_wr_all = round(forced_wins_all / forced_total_all * 100, 1) if forced_total_all else 0
 
         try:
+            from src.analytics.loss_categorizer import PRE_SNAPSHOT_LABEL
             from src.analytics.loss_categorizer import breakdown as _loss_breakdown
 
             loss_trades = [(t, t.get("entry_snapshot")) for t in forced_all
                            if t.get("outcome") == "LOSS"]
-            loss_breakdown = {k: v for k, v in _loss_breakdown(loss_trades).items() if v > 0}
+            raw_breakdown = _loss_breakdown(loss_trades)
+            pre_snapshot_count = raw_breakdown.pop(PRE_SNAPSHOT_LABEL, 0)
+            # PRE_SNAPSHOT trades have no data to categorize (they predate the
+            # entry_snapshot field) — kept out of the categorized list so it
+            # doesn't read like "the system doesn't know why N trades lost";
+            # reported separately as a plain count instead.
+            loss_breakdown = {k: v for k, v in raw_breakdown.items() if v > 0}
             loss_text = ("\n".join(f"  {k}: {v}" for k in sorted(loss_breakdown, key=loss_breakdown.get, reverse=True)
                                    for v in [loss_breakdown[k]])
                         if loss_breakdown else "  No categorized losses yet.")
+            if pre_snapshot_count:
+                loss_text += f"\n  ({pre_snapshot_count} older trade(s) predate entry_snapshot — uncategorized)"
         except Exception:
             loss_text = "  Unavailable"
 

@@ -28,6 +28,14 @@ log = logging.getLogger(__name__)
 
 # Paper/demo only — live capital always comes from the broker, never here.
 DEFAULT_PORTFOLIO_VALUE_INR = settings.paper_capital_inr
+
+# Market-neutral pairs trades have a materially higher base win probability
+# than directional momentum (PairsTradingStrategy already gates entry at
+# correlation >= 0.70 and z-score >= 2.0 — a real, verified divergence, not a
+# hopeful breakout), so the same 1.5:1 net-R:R floor used for directional
+# trades is inappropriate and was blocking genuinely good pairs signals.
+DIRECTIONAL_MIN_NET_RR = 1.5
+PAIRS_MIN_NET_RR = 1.15
 DAILY_LOSS_LIMIT_PCT = LIMITS.daily_loss_limit_pct
 DAILY_LOSS_HALT_FILE = Path("data/cache/daily_loss_halt.txt")
 
@@ -241,9 +249,12 @@ class RiskChecker:
 
         # 2b. Net R:R after real transaction costs (audit finding: gross +0.24%/trade
         # expectancy was net -0.21%/trade once STT/slippage/GST applied — a target
-        # that looks like 2:1 gross can be under 1:1 net). Skipped for pairs: their
-        # target/stop already reflect spread economics, scored separately by the judge.
-        if not is_pairs and (entry_price := technical.get("entry_price")):
+        # that looks like 2:1 gross can be under 1:1 net). Pairs trades use a lower
+        # floor (PAIRS_MIN_NET_RR) rather than being skipped entirely — a verified
+        # statistical divergence (corr>=0.70, z>=2.0) has a higher base win
+        # probability than directional momentum, so demanding the same 1.5:1
+        # directional floor was rejecting genuinely good pairs signals.
+        if entry_price := technical.get("entry_price"):
             stop_for_rr = technical.get("stop_price")
             target_for_rr = technical.get("target_price")
             if stop_for_rr and target_for_rr and (entry_price - stop_for_rr) > 0:
@@ -253,8 +264,11 @@ class RiskChecker:
                 net_target_move_pct = (target_for_rr - entry_price) / entry_price * 100 - rr_costs.total_pct
                 net_stop_move_pct = abs((stop_for_rr - entry_price) / entry_price * 100)
                 net_rr = net_target_move_pct / net_stop_move_pct if net_stop_move_pct else 0
-                if net_rr < 1.5:
-                    reasons.append(f"Net R:R {net_rr:.1f}:1 after costs — below 1.5:1 minimum")
+                min_rr = PAIRS_MIN_NET_RR if is_pairs else DIRECTIONAL_MIN_NET_RR
+                log.info("Net R:R floor applied for %s: %.2f:1 (pairs=%s)", symbol, min_rr, is_pairs)
+                if net_rr < min_rr:
+                    reasons.append(f"Net R:R {net_rr:.1f}:1 after costs — below {min_rr:.2f}:1 minimum"
+                                  f" ({'pairs' if is_pairs else 'directional'})")
 
         # 3. Stop must exist — no exceptions.
         stop_price = technical.get("stop_price")

@@ -97,3 +97,36 @@ def test_capital_sanity_flags_undersized_paper_capital():
 def test_capital_sanity_passes_at_realistic_capital():
     result = check_capital_sanity(portfolio_value_inr=100000.0, prices={"INFY": 1040.0})
     assert result["ok"] is True
+
+
+def _rr_borderline_state(strategy_name: str | None):
+    """entry=1000, stop=970, target=1045 -> net R:R ~= 1.39:1 after costs —
+    below the 1.5:1 directional floor but above the 1.15:1 pairs floor."""
+    state = get_initial_state("AXISBANK")
+    tech = {
+        "score": 0.90, "signal": "BUY", "entry_price": 1000.0,
+        "stop_price": 970.0, "target_price": 1045.0, "proceed": True,
+    }
+    if strategy_name:
+        tech["strategy_name"] = strategy_name
+    state["technical_verdict"] = tech
+    state["fundamental_verdict"] = {"score": 0.88, "proceed": True}
+    state["judge_verdict"] = {"approved": True, "score": 0.85, "flags": []}
+    return state
+
+
+def test_directional_trade_rejected_below_1_5_net_rr():
+    state = _rr_borderline_state(strategy_name=None)
+    result = RiskChecker(portfolio_value_inr=100000.0, open_positions=0).check(state)
+    assert result["approved"] is False
+    assert any("Net R:R" in r and "1.50" in r for r in result["reasons"])
+
+
+def test_pairs_trade_not_rejected_at_same_net_rr():
+    """The exact same R:R that blocks a directional trade must clear the
+    pairs floor (1.15:1) — pairs have a higher base win probability from a
+    verified statistical divergence, not a hopeful breakout."""
+    state = _rr_borderline_state(strategy_name="pairs_trading")
+    result = RiskChecker(portfolio_value_inr=100000.0, open_positions=0).check(state)
+    assert not any("Net R:R" in r for r in result.get("reasons", []))
+    assert result["approved"] is True

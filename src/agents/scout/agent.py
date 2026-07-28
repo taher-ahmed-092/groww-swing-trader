@@ -424,10 +424,30 @@ class ScoutAgent:
 
         self._unaffordable = []
         scored: list[dict] = []
-        for symbol in symbols:
-            candidate = self._score_symbol(symbol, nifty_1m, nifty_20d, fii_dii, params, nifty_30d)
-            if candidate is not None:
-                scored.append(candidate)
+        # Fix 2 (scan-timeout root cause): _score_symbol is IO-bound (a yfinance
+        # network fetch dominates its runtime), so scoring 241 symbols serially
+        # is almost entirely wait time. Parallelize with a bounded worker pool;
+        # a slow/hanging symbol gets a per-future timeout rather than stalling
+        # the whole scan.
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {
+                pool.submit(self._score_symbol, symbol, nifty_1m, nifty_20d, fii_dii, params, nifty_30d): symbol
+                for symbol in symbols
+            }
+            for future in futures:
+                symbol = futures[future]
+                try:
+                    candidate = future.result(timeout=20)
+                except _FutureTimeout:
+                    console.print(f"[dim][SCOUT] {symbol} timed out — skipped[/dim]")
+                    continue
+                except Exception as exc:
+                    console.print(f"[dim][SCOUT] {symbol} failed: {exc} — skipped[/dim]")
+                    continue
+                if candidate is not None:
+                    scored.append(candidate)
 
         if self._unaffordable:
             examples = ", ".join(self._unaffordable[:5])

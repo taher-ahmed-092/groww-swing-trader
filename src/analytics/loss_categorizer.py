@@ -7,6 +7,8 @@ historical data that may no longer even be available.
 
 Categories, in priority order (a loss usually has more than one plausible
 cause — first match wins, ordered from most to least specific):
+  PRE_SNAPSHOT           trade predates the entry_snapshot field — genuinely
+                         uncategorizable, not "no cause found" (see below)
   STOP_TOO_TIGHT        stop distance was < 1x ATR at entry
   OVEREXTENDED          RSI > 68 at entry — bought into an already-extended move
   WEAK_TREND_CONFIRMATION  ADX signal was CHOPPY/NEUTRAL at entry
@@ -14,13 +16,21 @@ cause — first match wins, ordered from most to least specific):
   MARKET_WIDE_DROP       Nifty fell more than the stock did over the hold
   NEWS_SHOCK             exit gapped > 2x entry-time ATR against the position
   COSTS_ATE_PROFIT       gross was a small win but net (after costs) is a loss
-  UNKNOWN                none of the above could be determined from the snapshot
+  UNKNOWN                a snapshot exists but none of the rules above matched
+
+PRE_SNAPSHOT is a distinct bucket from UNKNOWN on purpose: a trade with no
+entry_snapshot at all (it predates the field) has NO data to categorize from,
+whereas UNKNOWN means data existed but didn't match a known pattern. Lumping
+them together made "UNKNOWN: 328" look like an analysis gap when it was
+mostly just old trades — see PRE_SNAPSHOT_LABEL / breakdown()'s exclusion.
 """
 from __future__ import annotations
 
+PRE_SNAPSHOT_LABEL = "PRE-SNAPSHOT (no data)"
+
 CATEGORIES = (
-    "STOP_TOO_TIGHT", "OVEREXTENDED", "WEAK_TREND_CONFIRMATION", "REGIME_MISMATCH",
-    "MARKET_WIDE_DROP", "NEWS_SHOCK", "COSTS_ATE_PROFIT", "UNKNOWN",
+    PRE_SNAPSHOT_LABEL, "STOP_TOO_TIGHT", "OVEREXTENDED", "WEAK_TREND_CONFIRMATION",
+    "REGIME_MISMATCH", "MARKET_WIDE_DROP", "NEWS_SHOCK", "COSTS_ATE_PROFIT", "UNKNOWN",
 )
 
 _BEARISH_REGIMES = {"BEAR_TRENDING", "VOLATILE", "TRANSITIONAL"}
@@ -33,7 +43,10 @@ def categorize_loss(trade: dict, entry_snapshot: dict | None) -> str:
     nested dict captured at entry (indicators/market_context/scores/entry_reason).
     Returns one of CATEGORIES; never raises — a missing field just skips that
     check and falls through toward UNKNOWN."""
-    snap = entry_snapshot or {}
+    if not entry_snapshot or not entry_snapshot.get("indicators"):
+        return PRE_SNAPSHOT_LABEL
+
+    snap = entry_snapshot
     indicators = snap.get("indicators") or {}
     market_context = snap.get("market_context") or {}
 

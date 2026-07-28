@@ -27,6 +27,15 @@ log = logging.getLogger(__name__)
 _CACHE_DIR = os.path.join("data", "cache")
 _CACHE_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 _REQUEST_PAUSE_SECONDS = 2.0
+
+# ROCE ("return on capital employed") isn't a valid quality metric for banks/
+# NBFCs/insurers: customer deposits and policy float sit inside "capital
+# employed" for these business models, so ROCE reads artificially low for
+# every financial regardless of actual quality (audit evidence: AXISBANK
+# 6.24%, INDUSINDBK 5.68%, IDFCFIRSTB 5.98% — all real, healthy banks — were
+# hard-rejected on this rule alone). Same story for D/E: leverage IS a bank's
+# business model, not a risk signal. Use ROE instead for financials.
+FINANCIAL_SECTORS = {"Banking", "Finance", "NBFC", "Insurance"}
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -204,26 +213,48 @@ class ScreenerScraper:
         self._write_cache(symbol, data)
         return data
 
-    def check_hard_rejects(self, data: dict) -> list[str]:
-        """Automatic disqualifiers. Empty list = no hard rejects."""
+    def check_hard_rejects(self, data: dict, sector: str | None = None) -> list[str]:
+        """Automatic disqualifiers. Empty list = no hard rejects.
+
+        `sector` (watchlist sector, e.g. "Banking") routes financials through
+        sector-appropriate rules — see FINANCIAL_SECTORS above for why ROCE/D:E
+        are wrong for them."""
         data = data or {}
         rejects: list[str] = []
+        is_financial = sector in FINANCIAL_SECTORS
 
         pledged = data.get("promoter_pledged_pct")
         if pledged is not None and pledged > 30:
             rejects.append(f"High promoter pledging ({pledged}%) — manipulation risk")
 
+        # Low holding is only a red flag when paired with pledging (skin-in-the-
+        # game concern + manipulation risk together). Holding < 1% alone means a
+        # professionally-managed/institutionally-held company (HDFC Bank, ICICI,
+        # L&T, ITC, Infosys are all near 0% promoter holding) — that's a feature,
+        # not a risk, and was wrongly hard-rejecting blue chips.
         holding = data.get("promoter_holding_pct")
-        if holding is not None and holding < 25:
-            rejects.append(f"Very low promoter holding ({holding}%) — weak skin in game")
+        if (holding is not None and 1 <= holding < 25
+                and pledged is not None and pledged > 15):
+            rejects.append(
+                f"Low promoter holding ({holding}%) combined with pledging "
+                f"({pledged}%) — weak skin in game + manipulation risk")
 
-        dte = data.get("debt_to_equity")
-        if dte is not None and dte > 3.0:
-            rejects.append(f"Dangerous debt levels (D/E = {dte})")
+        if is_financial:
+            # ROE is the correct capital-efficiency metric for a deposit-taking/
+            # leveraged business; D/E is meaningless (leverage IS the business model).
+            roe = data.get("roe_pct")
+            if roe is not None and roe < 5:
+                rejects.append(f"Poor return on equity for a financial (ROE {roe}%)")
+        else:
+            dte = data.get("debt_to_equity")
+            if dte is not None and dte > 3.0:
+                rejects.append(f"Dangerous debt levels (D/E = {dte})")
 
-        roce = data.get("roce_pct")
-        if roce is not None and roce < 10:
-            rejects.append(f"Poor capital efficiency (ROCE {roce}%)")
+            # Floor lowered 10 -> 6: ROCE 8% is mediocre, not disqualifying — that
+            # belongs in rule_score's scoring (weakness note), not a hard veto.
+            roce = data.get("roce_pct")
+            if roce is not None and roce < 6:
+                rejects.append(f"Poor capital efficiency (ROCE {roce}%)")
 
         # Piotroski is only meaningful once enough signals were actually evaluable —
         # a plain yfinance .info dict lacks prior-year fields for 6 of 9 signals, so

@@ -108,6 +108,12 @@ class IntradaySimulator:
             stop = round(entry * (1 - LIMITS.stop_loss_pct / 100), 2)
             target = round(entry + (entry - stop) * 1.2, 2)  # 1.2:1 for intraday
 
+            from src.memory.journal import build_entry_snapshot
+
+            entry_snapshot = build_entry_snapshot(
+                {}, {"score": round(rsi / 100, 3), "reasoning": f"{trend}, ADX {adx}"}, {}, {},
+                indicators=indicators, extra_context={"regime": regime_name})
+
             positions.append({
                 "symbol": symbol,
                 "entry": entry,
@@ -119,6 +125,7 @@ class IntradaySimulator:
                 "rsi_at_entry": round(rsi, 1),
                 "trend_at_entry": trend,
                 "adx_at_entry": adx,
+                "entry_snapshot": entry_snapshot,
             })
 
         self._write_json(_OPEN_FILE, positions)

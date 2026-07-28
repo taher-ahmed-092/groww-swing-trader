@@ -176,7 +176,7 @@ def _build_weekly_candidates() -> list[dict]:
         fundamental = FundamentalAgent().analyze(state)
 
         data = fundamental.get("data") or {}
-        if fundamental.get("hard_rejected") or screener.check_hard_rejects(data):
+        if fundamental.get("hard_rejected") or screener.check_hard_rejects(data, sector=sector):
             console.print(f"[yellow][JOB] discarding {symbol} (hard reject)[/yellow]")
             continue
         kept.append({**cand, "fundamental_verdict": fundamental})

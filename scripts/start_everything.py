@@ -160,14 +160,26 @@ def main() -> int:
 
         if market_open:
             console.print("[cyan]Market is OPEN — running immediate scan…[/]")
-            pairs_result = subprocess.run(
-                [sys.executable, "scripts/run_now.py", "--pairs"],
-                cwd=_REPO_ROOT, capture_output=True, text=True, timeout=120)
-            console.print(pairs_result.stdout[-500:] if pairs_result.stdout else "No output")
-            scan_result = subprocess.run(
-                [sys.executable, "scripts/run_now.py", "--scan"],
-                cwd=_REPO_ROOT, capture_output=True, text=True, timeout=180)
-            console.print(scan_result.stdout[-300:] if scan_result.stdout else "No output")
+            # Timeouts raised (was 120s/180s): a full --scan fetches daily+weekly
+            # history, relative-strength vs Nifty, and affordability checks across
+            # 241 watchlist symbols — even with the fetcher cache + parallel scoring
+            # (Fix 2), that legitimately needs more headroom than 180s allowed.
+            try:
+                pairs_result = subprocess.run(
+                    [sys.executable, "scripts/run_now.py", "--pairs"],
+                    cwd=_REPO_ROOT, capture_output=True, text=True, timeout=240)
+                console.print(pairs_result.stdout[-500:] if pairs_result.stdout else "No output")
+            except subprocess.TimeoutExpired as exc:
+                reached = exc.stdout[-500:] if exc.stdout else "no output captured"
+                console.print(f"[yellow]--pairs timed out after 240s. Last output reached:\n{reached}[/yellow]")
+            try:
+                scan_result = subprocess.run(
+                    [sys.executable, "scripts/run_now.py", "--scan"],
+                    cwd=_REPO_ROOT, capture_output=True, text=True, timeout=420)
+                console.print(scan_result.stdout[-300:] if scan_result.stdout else "No output")
+            except subprocess.TimeoutExpired as exc:
+                reached = exc.stdout[-500:] if exc.stdout else "no output captured"
+                console.print(f"[yellow]--scan timed out after 420s. Last output reached:\n{reached}[/yellow]")
         else:
             console.print(
                 "[yellow]Market CLOSED — market opens 9:15 AM IST weekdays. "

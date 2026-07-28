@@ -136,7 +136,7 @@ class FundamentalAgent:
             sector = data.get("sector")
 
         # ── Hard-reject gate (deterministic, pre-LLM — saves tokens) ──
-        rejects = self.screener.check_hard_rejects(data)
+        rejects = self.screener.check_hard_rejects(data, sector=sector)
         if rejects:
             console.print(f"[red][FUNDAMENTAL] {symbol} AUTO-REJECTED: {'; '.join(rejects)}[/red]")
             return {

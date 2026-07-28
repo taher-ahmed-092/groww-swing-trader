@@ -8,6 +8,7 @@ an error — we never raise and never spam the console with yfinance 404 traceba
 from __future__ import annotations
 
 import logging
+import time
 
 import pandas as pd
 import yfinance as yf
@@ -17,6 +18,15 @@ for _noisy in ("yfinance", "yfinance.data", "yfinance.utils", "yfinance.ticker",
     logging.getLogger(_noisy).setLevel(logging.CRITICAL)
 
 log = logging.getLogger(__name__)
+
+# Module-level (process-wide) in-memory cache, keyed by (symbol, period, interval),
+# with a 15-minute TTL. Root cause of the --scan timeout: scout, technical, and
+# pairs each independently re-fetch the same symbol's price history within a
+# single run, and each fetch is a real network round-trip — across 241 watchlist
+# symbols that redundancy alone can add minutes. A short TTL is safe: intraday
+# price data doesn't meaningfully change inside 15 minutes for swing-trade sizing.
+_PRICE_HISTORY_TTL_SECONDS = 15 * 60
+_price_history_cache: dict[tuple[str, str, str], tuple[float, pd.DataFrame | None]] = {}
 
 
 class MarketDataFetcher:
@@ -29,6 +39,18 @@ class MarketDataFetcher:
 
     def get_price_history(
         self, symbol: str, period: str = "6mo", interval: str = "1d"
+    ) -> pd.DataFrame | None:
+        cache_key = (symbol.strip().upper(), period, interval)
+        cached = _price_history_cache.get(cache_key)
+        if cached is not None and (time.time() - cached[0]) < _PRICE_HISTORY_TTL_SECONDS:
+            return cached[1]
+
+        df = self._fetch_price_history(symbol, period, interval)
+        _price_history_cache[cache_key] = (time.time(), df)
+        return df
+
+    def _fetch_price_history(
+        self, symbol: str, period: str, interval: str
     ) -> pd.DataFrame | None:
         try:
             ticker = yf.Ticker(self._to_yf_symbol(symbol))

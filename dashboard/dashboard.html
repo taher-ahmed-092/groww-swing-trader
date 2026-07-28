@@ -929,16 +929,28 @@ function updatePnlChart(history){
 }
 
 let lossChart=null;
+const PRE_SNAPSHOT_LABEL='PRE-SNAPSHOT (no data)';
 function updateLossChart(breakdown){
   const wrap=document.getElementById('loss-chart-wrap');if(!wrap)return;
-  const entries=Object.entries(breakdown||{}).filter(([,n])=>n>0).sort((a,b)=>b[1]-a[1]);
+  const preSnapshotCount=(breakdown||{})[PRE_SNAPSHOT_LABEL]||0;
+  // Trades predating entry_snapshot have literally no data to categorize —
+  // they're excluded from the chart (and its implicit percentages) so the
+  // chart reflects only trades that COULD be categorized, not a bucket that
+  // reads like "the system doesn't know why 328 trades lost."
+  const entries=Object.entries(breakdown||{})
+    .filter(([k,n])=>n>0&&k!==PRE_SNAPSHOT_LABEL).sort((a,b)=>b[1]-a[1]);
+  const caption=preSnapshotCount?`<div style="font-family:var(--font-mono);font-size:10px;`+
+    `color:var(--text-muted);text-align:center;margin-top:6px">+${preSnapshotCount} older `+
+    `trade(s) predate entry_snapshot — excluded above</div>`:'';
   if(!entries.length){
-    wrap.innerHTML='<div class="loss-chart-empty">📊 Builds after first closed trades</div>';
+    wrap.innerHTML='<div class="loss-chart-empty">📊 Builds after first closed trades</div>'+caption;
     lossChart=null;return;
   }
   if(!document.getElementById('loss-chart')){
-    wrap.innerHTML='<canvas id="loss-chart" height="220"></canvas>';
+    wrap.innerHTML='<canvas id="loss-chart" height="220"></canvas><div id="loss-chart-caption"></div>';
   }
+  const captionEl=document.getElementById('loss-chart-caption');
+  if(captionEl)captionEl.innerHTML=caption;
   const canvas=document.getElementById('loss-chart'),ctx=canvas.getContext('2d');
   const max=entries[0][1];
   const labels=entries.map(([k])=>k),data=entries.map(([,n])=>n);
