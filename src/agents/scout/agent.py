@@ -399,6 +399,26 @@ class ScoutAgent:
             elif prior > 0.65:
                 flags.append("STOCK_TRACK_RECORD_STRONG")
 
+        # Company dossier: this stock's own multi-engine trade history, not just
+        # generic patterns — a stock we've personally lost on repeatedly gets a
+        # penalty even if today's setup looks fine, and vice versa for a proven winner.
+        try:
+            from src.memory.company_dossier import dossier_store
+
+            dossier_agg = dossier_store.get_aggregates(symbol)
+            if dossier_agg.get("total_trades", 0) >= 8:
+                wr = dossier_agg.get("win_rate", 50)
+                if wr < 35:
+                    score -= 1.5
+                    flags.append("DOSSIER_POOR_HISTORY")
+                    reasons.append(f"dossier: {wr:.0f}% WR over {dossier_agg['total_trades']} trades — poor history")
+                elif wr > 60:
+                    score += 1.0
+                    flags.append("DOSSIER_STRONG_HISTORY")
+                    reasons.append(f"dossier: {wr:.0f}% WR over {dossier_agg['total_trades']} trades — strong history")
+        except Exception:
+            pass
+
         return {
             "symbol": symbol,
             "name": meta["name"],

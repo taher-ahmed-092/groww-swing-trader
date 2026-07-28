@@ -87,6 +87,8 @@ class CommandHandler:
             "/flows": self._handle_flows,
             "/diagnose": self._handle_diagnose,
             "/health_check": self._handle_health_check,
+            "/jobs": self._handle_jobs,
+            "/stock": self._handle_stock,
         }
         # Old commands still resolve (never break a typed habit) but redirect.
         for old_cmd in self._REDIRECTS:
@@ -117,6 +119,8 @@ class CommandHandler:
         ("/flows", "Institutional flows + economic calendar"),
         ("/diagnose", "Why real trades aren't clearing the pipeline"),
         ("/health_check", "Full 9-component system health check"),
+        ("/jobs", "Scheduled job telemetry: last run, avg duration, failures"),
+        ("/stock", "Company dossier for a symbol: /stock SYMBOL"),
     ]
 
     def setup(self) -> None:
@@ -1190,6 +1194,58 @@ class CommandHandler:
             capture_output=True, text=True, timeout=60, cwd=".")
         output = result.stdout[-3000:] if result.stdout else (result.stderr or "")[-3000:]
         self._send(f"```\n{output}\n```")
+
+    def _handle_stock(self, args):
+        """dossier summary for /stock SYMBOL: sector, fundamentals, trade
+        record, best/worst regime, Bayesian win prob, recent notes"""
+        if not args:
+            self._send("Usage: /stock SYMBOL")
+            return
+        symbol = args[0].upper()
+        from src.memory.company_dossier import dossier_store
+
+        dossier = dossier_store.get(symbol)
+        agg = dossier.get("aggregates", {})
+        fh = dossier.get("fundamentals_history") or []
+        latest_fund = fh[-1] if fh else {}
+        notes = dossier.get("notes") or []
+        lines = [
+            f"📁 *{symbol} Dossier*",
+            "━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"Sector: {dossier.get('sector') or 'unknown'} | Tier: {dossier.get('tier') or 'unknown'}",
+            "",
+            "*Latest fundamentals:*",
+            f"ROCE {latest_fund.get('roce_pct')}% | ROE {latest_fund.get('roe_pct')}% | "
+            f"D/E {latest_fund.get('de_ratio')} | Piotroski {latest_fund.get('piotroski_score')}/9"
+            if latest_fund else "No fundamentals recorded yet.",
+            "",
+            "*Our trade record:*",
+            f"{agg.get('wins', 0)}W / {agg.get('losses', 0)}L "
+            f"({agg.get('win_rate', 0):.0f}% WR, {agg.get('total_trades', 0)} trades)",
+            f"Avg P&L: {agg.get('avg_pnl_pct', 0):+.2f}% | Avg hold: {agg.get('avg_hold_days', 0):.1f}d",
+            f"Best regime: {agg.get('best_regime') or '—'} | Worst regime: {agg.get('worst_regime') or '—'}",
+            f"Bayesian win prob: {agg.get('bayesian_win_prob', 0.5):.0%}",
+        ]
+        if notes:
+            lines += ["", "*Recent notes:*"] + [f"  {n}" for n in notes[-5:]]
+        self._send("\n".join(lines))
+
+    def _handle_jobs(self, args):
+        """per-job last run, avg duration, failure rate over last 20 runs"""
+        from src.analytics.job_telemetry import get_job_stats
+
+        stats = get_job_stats()
+        if not stats:
+            self._send("📋 No job telemetry recorded yet.")
+            return
+        lines = ["📋 *Job Telemetry (last 20 runs each)*", "━━━━━━━━━━━━━━━━━━━━━━━━"]
+        for job_name, s in sorted(stats.items()):
+            icon = "✅" if s["last_ok"] else "❌"
+            warn = " ⚠️" if s["failure_rate"] > 0.3 or s["avg_duration_s"] > 120 else ""
+            lines.append(
+                f"{icon} {job_name}: avg {s['avg_duration_s']:.1f}s, "
+                f"fail rate {s['failure_rate']:.0%} ({s['n_runs']}r){warn}")
+        self._send("\n".join(lines))
 
     def _handle_health_check(self, args):
         """runs the full 9-component system health check on demand"""

@@ -8,7 +8,10 @@ an error — we never raise and never spam the console with yfinance 404 traceba
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
+from collections import deque
 
 import pandas as pd
 import yfinance as yf
@@ -18,6 +21,34 @@ for _noisy in ("yfinance", "yfinance.data", "yfinance.utils", "yfinance.ticker",
     logging.getLogger(_noisy).setLevel(logging.CRITICAL)
 
 log = logging.getLogger(__name__)
+
+
+class _RateLimiter:
+    """Shared token-bucket across scout/replay/cont-sim/pairs — all of them
+    call through MarketDataFetcher, so gating here caps the COMBINED yfinance
+    call rate process-wide rather than each caller independently rate-limiting
+    itself (which wouldn't prevent their aggregate from tripping throttling).
+    On exhaustion, sleeps rather than failing the caller."""
+
+    def __init__(self, max_calls_per_minute: int) -> None:
+        self.max_calls = max_calls_per_minute
+        self._calls: deque[float] = deque()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.time()
+                while self._calls and now - self._calls[0] > 60:
+                    self._calls.popleft()
+                if len(self._calls) < self.max_calls:
+                    self._calls.append(now)
+                    return
+                sleep_for = max(0.05, 60 - (now - self._calls[0]) + 0.05)
+            time.sleep(sleep_for)
+
+
+_yfinance_rate_limiter = _RateLimiter(int(os.environ.get("YFINANCE_MAX_CALLS_PER_MIN", "60")))
 
 # Module-level (process-wide) in-memory cache, keyed by (symbol, period, interval),
 # with a 15-minute TTL. Root cause of the --scan timeout: scout, technical, and
@@ -52,6 +83,7 @@ class MarketDataFetcher:
     def _fetch_price_history(
         self, symbol: str, period: str, interval: str
     ) -> pd.DataFrame | None:
+        _yfinance_rate_limiter.acquire()
         try:
             ticker = yf.Ticker(self._to_yf_symbol(symbol))
             df = ticker.history(period=period, interval=interval)

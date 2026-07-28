@@ -358,7 +358,9 @@ class AlwaysOnTrader:
             entry_snapshot = build_entry_snapshot(
                 {}, {"score": signal_score, "reasoning": rationale}, {}, {},
                 indicators=indicators, extra_context={"regime": self._current_regime()})
-            return {
+            from src.analytics.strategy_attribution import classify_strategy
+
+            trade = {
                 "symbol": symbol, "entry": entry, "stop": stop, "target": target,
                 "exit": None, "pnl_pct": None, "outcome": "OPEN",
                 "signal_score": round(signal_score, 3),
@@ -367,7 +369,15 @@ class AlwaysOnTrader:
                 "entry_snapshot": entry_snapshot,
                 "is_forced": True, "market_was_closed": False,
                 "tier": ALL_STOCKS.get(symbol, {}).get("tier", "large"),
+                "strategy": classify_strategy(indicators),
             }
+            try:
+                from src.memory.company_dossier import dossier_store
+
+                dossier_store.record_technical(symbol, indicators)
+            except Exception:
+                pass
+            return trade
         except Exception:
             return None
 
@@ -396,8 +406,15 @@ class AlwaysOnTrader:
             gross_pnl_pct = round((exit_price - entry) / entry * 100, 2) if entry else 0.0
             tier = trade.get("tier") or ALL_STOCKS.get(symbol, {}).get("tier", "large")
             pnl_pct = net_pnl_pct(gross_pnl_pct, entry, exit_price, tier, is_intraday=True)
-            return {**trade, "exit": exit_price, "pnl_pct": pnl_pct, "gross_pnl_pct": gross_pnl_pct,
-                    "outcome": outcome, "closed_at": datetime.now(IST).isoformat()}
+            closed = {**trade, "exit": exit_price, "pnl_pct": pnl_pct, "gross_pnl_pct": gross_pnl_pct,
+                      "outcome": outcome, "closed_at": datetime.now(IST).isoformat()}
+            try:
+                from src.memory.company_dossier import dossier_store
+
+                dossier_store.record_trade(symbol, {**closed, "source": "forced"})
+            except Exception:
+                pass
+            return closed
         except Exception:
             return None
 

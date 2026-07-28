@@ -109,6 +109,43 @@ _CATCHUP_JOBS = [
 ]
 
 
+_SCAN_LOCK_FILE = Path("data/cache/scan_running.lock")
+_SCAN_LOCK_STALE_MINUTES = 20
+
+
+def _is_scan_running() -> bool:
+    """A scan lock (PID + timestamp) younger than 20 minutes means a real
+    scan is in flight — continuous_sim/replay jobs skip this cycle rather
+    than competing for the same yfinance rate-limit budget and CPU."""
+    if not _SCAN_LOCK_FILE.exists():
+        return False
+    try:
+        _, ts_str = _SCAN_LOCK_FILE.read_text().strip().split(":", 1)
+        age_minutes = (time.time() - float(ts_str)) / 60
+        return age_minutes < _SCAN_LOCK_STALE_MINUTES
+    except Exception:
+        return False
+
+
+class _ScanLock:
+    """Context manager wrapping a scan-shaped job so overlapping learning
+    jobs (continuous_sim, replay) can detect and skip while it runs."""
+
+    def __enter__(self):
+        try:
+            _SCAN_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _SCAN_LOCK_FILE.write_text(f"{os.getpid()}:{time.time()}")
+        except OSError:
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            _SCAN_LOCK_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _kill_switch() -> bool:
     return Path(LIMITS.kill_switch_file).exists()
 
@@ -167,7 +204,8 @@ def _build_weekly_candidates() -> list[dict]:
     schedule. Factored out so daily_premarket_job can run the identical
     build inline when that file is missing or stale (Fix 6)."""
     screener = ScreenerScraper()
-    candidates = ScoutAgent().scan()
+    with _ScanLock():
+        candidates = ScoutAgent().scan()
     kept: list[dict] = []
     for cand in candidates:
         symbol, sector = cand["symbol"], cand.get("sector", "")
@@ -378,7 +416,8 @@ def market_open_scan_job() -> None:
         return
 
     notifier = TelegramNotifier()
-    candidates = ScoutAgent().scan()[:5]
+    with _ScanLock():
+        candidates = ScoutAgent().scan()[:5]
     if not candidates:
         console.print("[dim][JOB] market_open_scan_job: no candidates[/dim]")
         return
@@ -796,7 +835,7 @@ def hourly_health_job() -> None:
 def off_hours_replay_job() -> None:
     """Every 2 hours, 24/7 — replay historical days to grow the knowledge base.
     Lighter batch during market hours (real scans take priority), full at night."""
-    if _kill_switch():
+    if _kill_switch() or _is_scan_running():
         return
     from src.learning.historical_replay import HistoricalReplayEngine
 
@@ -833,7 +872,7 @@ def off_hours_replay_job() -> None:
 
 def deep_replay_job() -> None:
     """Nightly 11:30 PM IST — deeper replay (more days per stock)."""
-    if _kill_switch():
+    if _kill_switch() or _is_scan_running():
         return
     from src.learning.historical_replay import HistoricalReplayEngine
 
@@ -849,7 +888,7 @@ def regime_replay_job() -> None:
     picking whichever regime is furthest below its 100-record target, so
     rare historical regimes (e.g. a real bear stretch) stop being starved
     by the regime-agnostic rotation's natural skew toward common regimes."""
-    if _kill_switch():
+    if _kill_switch() or _is_scan_running():
         return
     from src.learning.historical_replay import HistoricalReplayEngine
 
@@ -1007,7 +1046,7 @@ def continuous_sim_job() -> None:
     Runs regardless of market hours; during market hours it augments
     forced_trade_job's live activity, off-hours it's the only source of new
     learning data (src/learning/continuous_simulator.py)."""
-    if _kill_switch():
+    if _kill_switch() or _is_scan_running():
         return
     from src.learning.continuous_simulator import ContinuousSimulator
 
@@ -1171,40 +1210,49 @@ if __name__ == "__main__":
 
     scheduler = BackgroundScheduler(
         timezone=TZ,
-        job_defaults={"coalesce": True, "misfire_grace_time": 900},
+        job_defaults={"coalesce": True, "misfire_grace_time": 900, "max_instances": 1},
     )
-    scheduler.add_job(weekly_research_job, "cron", day_of_week="sun", hour=19, minute=0)
-    scheduler.add_job(daily_premarket_job, "cron", day_of_week="mon-fri", hour=9, minute=0)
-    scheduler.add_job(market_open_pairs_job, "cron", day_of_week="mon-fri", hour=9, minute=20)
-    scheduler.add_job(market_open_scan_job, "cron", day_of_week="mon-fri", hour=9, minute=25)
-    scheduler.add_job(daily_learning_job, "cron", day_of_week="mon-fri", hour=16, minute=30)
-    scheduler.add_job(daily_postmarket_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
-    scheduler.add_job(weekly_distillation_job, "cron", day_of_week="sun", hour=20, minute=0)
-    scheduler.add_job(weekly_agent_evaluation_job, "cron", day_of_week="sun", hour=20, minute=30)
-    scheduler.add_job(weekly_model_retrain_job, "cron", day_of_week="sun", hour=21, minute=0)
-    scheduler.add_job(saturday_batch_job, "cron", day_of_week="sat", hour=19, minute=0)
-    scheduler.add_job(sunday_morning_batch_check, "cron", day_of_week="sun", hour=7, minute=0)
-    scheduler.add_job(intraday_entry_job, "cron", day_of_week="mon-fri", hour=9, minute=30)
-    scheduler.add_job(intraday_exit_job, "cron", day_of_week="mon-fri", hour=15, minute=15)
-    scheduler.add_job(_with_marker(intraday_scan_job, "intraday_scan"), "cron",
+
+    def _job(func, name: str):
+        """Wraps a job with telemetry tracking (Fix 4) — every run records
+        {job_name, started, duration_s, ok, error} regardless of whether it
+        also carries a catch-up marker."""
+        from src.analytics.job_telemetry import track_job
+
+        return track_job(func, name)
+
+    scheduler.add_job(_job(weekly_research_job, "weekly_research"), "cron", day_of_week="sun", hour=19, minute=0)
+    scheduler.add_job(_job(daily_premarket_job, "daily_premarket"), "cron", day_of_week="mon-fri", hour=9, minute=0)
+    scheduler.add_job(_job(market_open_pairs_job, "market_open_pairs"), "cron", day_of_week="mon-fri", hour=9, minute=20)
+    scheduler.add_job(_job(market_open_scan_job, "market_open_scan"), "cron", day_of_week="mon-fri", hour=9, minute=25)
+    scheduler.add_job(_job(daily_learning_job, "daily_learning"), "cron", day_of_week="mon-fri", hour=16, minute=30)
+    scheduler.add_job(_job(daily_postmarket_job, "daily_postmarket"), "cron", day_of_week="mon-fri", hour=16, minute=0)
+    scheduler.add_job(_job(weekly_distillation_job, "weekly_distillation"), "cron", day_of_week="sun", hour=20, minute=0)
+    scheduler.add_job(_job(weekly_agent_evaluation_job, "weekly_agent_evaluation"), "cron", day_of_week="sun", hour=20, minute=30)
+    scheduler.add_job(_job(weekly_model_retrain_job, "weekly_model_retrain"), "cron", day_of_week="sun", hour=21, minute=0)
+    scheduler.add_job(_job(saturday_batch_job, "saturday_batch"), "cron", day_of_week="sat", hour=19, minute=0)
+    scheduler.add_job(_job(sunday_morning_batch_check, "sunday_morning_batch_check"), "cron", day_of_week="sun", hour=7, minute=0)
+    scheduler.add_job(_job(intraday_entry_job, "intraday_entry"), "cron", day_of_week="mon-fri", hour=9, minute=30)
+    scheduler.add_job(_job(intraday_exit_job, "intraday_exit"), "cron", day_of_week="mon-fri", hour=15, minute=15)
+    scheduler.add_job(_job(_with_marker(intraday_scan_job, "intraday_scan"), "intraday_scan"), "cron",
                        day_of_week="mon-fri", hour="9-14", minute="*/30")
-    scheduler.add_job(midmorning_guarantee_job, "cron", day_of_week="mon-fri", hour=10, minute=30)
-    scheduler.add_job(midday_guarantee_job, "cron", day_of_week="mon-fri", hour=12, minute=30)
-    scheduler.add_job(afternoon_guarantee_job, "cron", day_of_week="mon-fri", hour=14, minute=0)
-    scheduler.add_job(hourly_health_job, "cron", minute=0)
-    scheduler.add_job(off_hours_replay_job, "cron", hour="*/2", minute=15)
-    scheduler.add_job(deep_replay_job, "cron", hour=23, minute=30)
-    scheduler.add_job(regime_replay_job, "cron", hour=22, minute=45)
-    scheduler.add_job(daily_lessons_job, "cron", hour=23, minute=0)
-    scheduler.add_job(rf_train_job, "cron", day_of_week="sun", hour=21, minute=30)
-    scheduler.add_job(_with_marker(forced_trade_job, "forced_trade"), "cron", minute="*/15")
-    scheduler.add_job(forced_close_job, "cron", minute="7,22,37,52")
-    scheduler.add_job(daily_forced_summary_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
-    scheduler.add_job(_with_marker(continuous_sim_job, "continuous_sim"), "cron", minute="*/30")
-    scheduler.add_job(drift_check_job, "cron", hour="*/6")
-    scheduler.add_job(triday_health_check_job, "cron", day="*/3", hour=20, minute=0)
-    scheduler.add_job(watchlist_validation_job, "cron", day=1, hour=8, minute=0)
-    scheduler.add_job(nightly_engine_scorecard_job, "cron", hour=23, minute=15)
+    scheduler.add_job(_job(midmorning_guarantee_job, "midmorning_guarantee"), "cron", day_of_week="mon-fri", hour=10, minute=30)
+    scheduler.add_job(_job(midday_guarantee_job, "midday_guarantee"), "cron", day_of_week="mon-fri", hour=12, minute=30)
+    scheduler.add_job(_job(afternoon_guarantee_job, "afternoon_guarantee"), "cron", day_of_week="mon-fri", hour=14, minute=0)
+    scheduler.add_job(_job(hourly_health_job, "hourly_health"), "cron", minute=0)
+    scheduler.add_job(_job(off_hours_replay_job, "off_hours_replay"), "cron", hour="*/2", minute=15)
+    scheduler.add_job(_job(deep_replay_job, "deep_replay"), "cron", hour=23, minute=30)
+    scheduler.add_job(_job(regime_replay_job, "regime_replay"), "cron", hour=22, minute=45)
+    scheduler.add_job(_job(daily_lessons_job, "daily_lessons"), "cron", hour=23, minute=0)
+    scheduler.add_job(_job(rf_train_job, "rf_train"), "cron", day_of_week="sun", hour=21, minute=30)
+    scheduler.add_job(_job(_with_marker(forced_trade_job, "forced_trade"), "forced_trade"), "cron", minute="*/15")
+    scheduler.add_job(_job(forced_close_job, "forced_close"), "cron", minute="7,22,37,52")
+    scheduler.add_job(_job(daily_forced_summary_job, "daily_forced_summary"), "cron", day_of_week="mon-fri", hour=16, minute=0)
+    scheduler.add_job(_job(_with_marker(continuous_sim_job, "continuous_sim"), "continuous_sim"), "cron", minute="*/30")
+    scheduler.add_job(_job(drift_check_job, "drift_check"), "cron", hour="*/6")
+    scheduler.add_job(_job(triday_health_check_job, "triday_health_check"), "cron", day="*/3", hour=20, minute=0)
+    scheduler.add_job(_job(watchlist_validation_job, "watchlist_validation"), "cron", day=1, hour=8, minute=0)
+    scheduler.add_job(_job(nightly_engine_scorecard_job, "nightly_engine_scorecard"), "cron", hour=23, minute=15)
 
     # Catch-up (Fix 7): a job whose last-run marker is older than its own
     # interval, while the market is open right now, means a tick was missed

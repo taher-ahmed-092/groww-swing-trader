@@ -20,41 +20,25 @@ class PerformanceAnalyzer:
         self.starting_capital = starting_capital
 
     def get_strategy_breakdown(self) -> dict:
-        """Win rate / count / avg P&L / best regime per strategy (the learning made visible)."""
-        import json
+        """Win rate / count / avg P&L / best regime per strategy (the learning made
+        visible) — across ALL sources (real + forced + intraday + continuous_sim),
+        not just real pipeline trades. Real-only counting is why Strategy
+        Performance previously showed 0 trades for 3 of 4 strategies: forced/
+        cont-sim volume (the vast majority of trades) never recorded a strategy tag."""
+        from src.analytics.strategy_attribution import compute_strategy_stats
+        from src.analytics.trade_loader import load_all_trade_history
 
-        closed = self._closed()
-        buckets: dict[str, list] = {}
-        for t in closed:
-            buckets.setdefault(getattr(t, "strategy_name", "momentum") or "momentum", []).append(t)
-
-        breakdown: dict[str, dict] = {}
-        for strat in ("momentum", "mean_reversion", "breakout", "pairs_trading"):
-            rows = buckets.get(strat, [])
-            n = len(rows)
-            wins = sum(1 for t in rows if t.outcome == "WIN")
-            avg_pnl = round(sum(t.pnl_pct or 0 for t in rows) / n, 2) if n else 0.0
-            # Best regime = highest win rate among regimes with >= 2 trades.
-            regime_stats: dict[str, list] = {}
-            for t in rows:
-                try:
-                    rg = json.loads(t.state_snapshot or "{}").get("market_context", {}).get("regime")
-                except (json.JSONDecodeError, TypeError):
-                    rg = None
-                if rg:
-                    regime_stats.setdefault(rg, []).append(1 if t.outcome == "WIN" else 0)
-            best_regime = "—"
-            best_wr = -1.0
-            for rg, outcomes in regime_stats.items():
-                if len(outcomes) >= 2:
-                    wr = sum(outcomes) / len(outcomes)
-                    if wr > best_wr:
-                        best_wr, best_regime = wr, rg
-            breakdown[strat] = {
-                "win_rate": round(wins / n, 4) if n else None,
-                "trades": n, "avg_pnl_pct": avg_pnl, "best_regime": best_regime,
+        all_trades = load_all_trade_history(self.journal)
+        stats = compute_strategy_stats(all_trades)
+        return {
+            strat: {
+                "win_rate": s["win_rate"], "trades": s["trades"],
+                "avg_pnl_pct": s["avg_pnl_pct"] if s["avg_pnl_pct"] is not None else 0.0,
+                "best_regime": s["best_regime"] or "—",
+                "profit_factor": s["profit_factor"],
             }
-        return breakdown
+            for strat, s in stats.items()
+        }
 
     def get_performance_trajectory(self) -> dict:
         """Compare the last 10 closed trades' win rate to the prior 10."""

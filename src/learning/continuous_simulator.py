@@ -255,7 +255,11 @@ class ContinuousSimulator:
             {}, {"score": signal["score"], "reasoning": signal.get("action", "")}, {}, {},
             indicators=indicators, extra_context={"regime": market_regime})
 
-        return {
+        from src.analytics.strategy_attribution import classify_strategy
+
+        strategy = classify_strategy(indicators) if signal.get("strategy_type") != "mean_reversion" else "mean_reversion"
+
+        record = {
             "symbol": symbol,
             "tier": tier,
             "window_end": window_end,
@@ -274,10 +278,19 @@ class ContinuousSimulator:
             "trend": indicators.get("trend", "SIDEWAYS"),
             "adx": indicators.get("adx_signal", "NEUTRAL"),
             "strategy_type": signal.get("strategy_type", "momentum"),
+            "strategy": strategy,
             "simulated_at": datetime.now(IST).isoformat(),
             "source": "continuous_sim",
             "pattern_added": pattern_added,
         }
+        try:
+            from src.memory.company_dossier import dossier_store
+
+            dossier_store.record_technical(symbol, indicators)
+            dossier_store.record_trade(symbol, record)
+        except Exception:
+            pass
+        return record
 
     def _evaluate_signal(self, ind: dict, tier: str, entry: float) -> dict:
         """Fast rule-based signal — no LLM needed, pure math over indicators.

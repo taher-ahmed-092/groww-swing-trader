@@ -114,19 +114,29 @@ class IntradaySimulator:
                 {}, {"score": round(rsi / 100, 3), "reasoning": f"{trend}, ADX {adx}"}, {}, {},
                 indicators=indicators, extra_context={"regime": regime_name})
 
+            from src.analytics.strategy_attribution import classify_strategy
+
             positions.append({
                 "symbol": symbol,
                 "entry": entry,
                 "stop": stop,
                 "target": target,
                 "entry_time": datetime.now(IST).isoformat(),
+                "opened_at": datetime.now(IST).isoformat(),
                 "regime": regime_name,
                 "market_regime": regime_name,
                 "rsi_at_entry": round(rsi, 1),
                 "trend_at_entry": trend,
                 "adx_at_entry": adx,
                 "entry_snapshot": entry_snapshot,
+                "strategy": classify_strategy(indicators),
             })
+            try:
+                from src.memory.company_dossier import dossier_store
+
+                dossier_store.record_technical(symbol, indicators)
+            except Exception:
+                pass
 
         self._write_json(_OPEN_FILE, positions)
         log.info("Opened %d intraday simulations", len(positions))
@@ -174,14 +184,21 @@ class IntradaySimulator:
 
             self._learn(journal, pos, outcome)
 
-            results.append({
+            closed = {
                 **pos,
                 "exit": exit_price,
                 "pnl_pct": pnl_pct,
                 "gross_pnl_pct": gross_pnl_pct,
                 "outcome": outcome,
                 "closed_at": datetime.now(IST).isoformat(),
-            })
+            }
+            try:
+                from src.memory.company_dossier import dossier_store
+
+                dossier_store.record_trade(symbol, {**closed, "source": "intraday"})
+            except Exception:
+                pass
+            results.append(closed)
 
         self._write_json(_OPEN_FILE, [])
 

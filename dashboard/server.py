@@ -361,7 +361,7 @@ def collect_dashboard_data() -> dict:
         learning_metrics["xgboost_progress"] = xgb_status.get("progress_pct", 0)
 
         try:
-            from src.analytics.loss_categorizer import breakdown as _loss_breakdown
+            from src.analytics.loss_categorizer import breakdown_for_chart as _loss_breakdown_for_chart
 
             loss_trades = [(t, t.get("entry_snapshot")) for t in forced_history
                            if t.get("outcome") == "LOSS"]
@@ -370,9 +370,17 @@ def collect_dashboard_data() -> dict:
                 cont_sim_history = _json.loads(cont_sim_file.read_text())
                 loss_trades.extend((t, t.get("entry_snapshot")) for t in cont_sim_history
                                    if t.get("outcome") == "LOSS")
-            loss_reason_breakdown = _loss_breakdown(loss_trades)
+            intraday_hist_file = Path("data/cache/intraday_sim_history.json")
+            if intraday_hist_file.exists():
+                intraday_history = _json.loads(intraday_hist_file.read_text())
+                loss_trades.extend((t, t.get("entry_snapshot")) for t in intraday_history
+                                   if t.get("outcome") == "LOSS")
+            # PRE_SNAPSHOT is excluded from the chart dataset entirely (reported
+            # as a footnote count only) — a bar chart dominated by "no data"
+            # trades reads as an analysis gap, not old data (Fix 3).
+            loss_reason_breakdown, pre_snapshot_loss_count = _loss_breakdown_for_chart(loss_trades)
         except Exception:
-            loss_reason_breakdown = {}
+            loss_reason_breakdown, pre_snapshot_loss_count = {}, 0
 
         _KB_ICONS = {"HISTORICAL_REPLAY": "📡", "FORCED_LEARNING": "⚡",
                      "INTRADAY_SIMULATION": "🔬", "SHORT_SIMULATION": "⏱️"}
@@ -523,6 +531,7 @@ def collect_dashboard_data() -> dict:
             "forced_trades": forced_summary,
             "learning_metrics": learning_metrics,
             "loss_reason_breakdown": loss_reason_breakdown,
+            "pre_snapshot_loss_count": pre_snapshot_loss_count,
             "adaptive_thresholds": adaptive_data,
             "combined_totals": combined_totals,
             "combined_totals_all_time": combined_totals_all_time,

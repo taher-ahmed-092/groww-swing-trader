@@ -27,10 +27,11 @@ mostly just old trades — see PRE_SNAPSHOT_LABEL / breakdown()'s exclusion.
 from __future__ import annotations
 
 PRE_SNAPSHOT_LABEL = "PRE-SNAPSHOT (no data)"
+UNCATEGORISED_LABEL = "UNCATEGORISED (snapshot present)"
 
 CATEGORIES = (
     PRE_SNAPSHOT_LABEL, "STOP_TOO_TIGHT", "OVEREXTENDED", "WEAK_TREND_CONFIRMATION",
-    "REGIME_MISMATCH", "MARKET_WIDE_DROP", "NEWS_SHOCK", "COSTS_ATE_PROFIT", "UNKNOWN",
+    "REGIME_MISMATCH", "MARKET_WIDE_DROP", "NEWS_SHOCK", "COSTS_ATE_PROFIT", UNCATEGORISED_LABEL,
 )
 
 _BEARISH_REGIMES = {"BEAR_TRENDING", "VOLATILE", "TRANSITIONAL"}
@@ -90,7 +91,7 @@ def categorize_loss(trade: dict, entry_snapshot: dict | None) -> str:
     if gross_pct is not None and net_pct is not None and gross_pct > 0 and net_pct <= 0:
         return "COSTS_ATE_PROFIT"
 
-    return "UNKNOWN"
+    return UNCATEGORISED_LABEL
 
 
 def breakdown(trades_with_snapshots: list[tuple[dict, dict | None]]) -> dict[str, int]:
@@ -101,3 +102,13 @@ def breakdown(trades_with_snapshots: list[tuple[dict, dict | None]]) -> dict[str
     for trade, snapshot in trades_with_snapshots:
         counts[categorize_loss(trade, snapshot)] += 1
     return counts
+
+
+def breakdown_for_chart(trades_with_snapshots: list[tuple[dict, dict | None]]) -> tuple[dict[str, int], int]:
+    """Same as breakdown(), but excludes PRE_SNAPSHOT entirely from the
+    returned dict (chart dataset) — it is reported back separately as a
+    footnote count so the chart isn't dominated by trades that predate the
+    entry_snapshot field entirely (no data to categorize, not "uncategorized")."""
+    counts = breakdown(trades_with_snapshots)
+    pre_snapshot_count = counts.pop(PRE_SNAPSHOT_LABEL, 0)
+    return counts, pre_snapshot_count

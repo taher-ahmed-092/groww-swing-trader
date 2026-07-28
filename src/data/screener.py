@@ -211,6 +211,12 @@ class ScreenerScraper:
             return None
 
         self._write_cache(symbol, data)
+        try:
+            from src.memory.company_dossier import dossier_store
+
+            dossier_store.record_fundamentals(symbol, data)
+        except Exception:
+            pass
         return data
 
     def check_hard_rejects(self, data: dict, sector: str | None = None) -> list[str]:

@@ -184,7 +184,67 @@ class EngineScorecard:
                     f"PF={pf:.2f}, n_trades={n}, win_rate={stats['win_rate']:.0%}")
 
         self._save_throttles(current)
+        changes.update(self.apply_strategy_throttles())
         return changes
+
+    # Strategy-level throttling — the honest version of "diversify across
+    # styles": once a strategy has enough trades to trust its profit factor,
+    # a chronically unprofitable one gets fewer future entries rather than
+    # keeping full-size volume just because it's one of "the four styles."
+    STRATEGY_THROTTLE_MIN_TRADES = 30
+    STRATEGY_THROTTLE_PF_THRESHOLD = 0.8
+
+    def apply_strategy_throttles(self) -> dict:
+        """Halves entry frequency (returns {strategy: {frequency_multiplier}})
+        for any strategy with >=30 trades and PF < 0.8, logging each new
+        throttle to the adaptation log exactly once (idempotent via the
+        throttle file's own strategy_ namespace)."""
+        from src.analytics.strategy_attribution import compute_strategy_stats
+        from src.analytics.trade_loader import load_all_trade_history
+        from src.memory.journal import TradingJournal
+
+        all_trades = load_all_trade_history(TradingJournal())
+        stats = compute_strategy_stats(all_trades)
+        current = self._load_throttles()
+        changes: dict = {}
+
+        for strategy, s in stats.items():
+            key = f"strategy_{strategy}"
+            n = s["trades"] or 0
+            pf = s["profit_factor"]
+            prev = current.get(key, {}).get("frequency_multiplier", 1.0)
+
+            if n >= self.STRATEGY_THROTTLE_MIN_TRADES and pf is not None and pf < self.STRATEGY_THROTTLE_PF_THRESHOLD:
+                new_mult = 0.5
+            else:
+                new_mult = 1.0
+
+            if new_mult != prev:
+                current[key] = {
+                    "frequency_multiplier": new_mult, "pf": pf,
+                    "updated": datetime.now(IST).isoformat(),
+                    "reason": f"PF {pf} over {n} trades" if pf is not None else "insufficient evidence",
+                }
+                changes[strategy] = {"old": prev, "new": new_mult, "pf": pf}
+                log_adaptation(
+                    "strategy_throttle",
+                    f"{strategy}: entry frequency x{prev} -> x{new_mult}",
+                    f"PF={pf}, n_trades={n}")
+
+        self._save_throttles(current)
+        return changes
+
+    @staticmethod
+    def get_strategy_frequency_multiplier(strategy: str) -> float:
+        """1.0 normal, 0.5 if throttled — read by entry points before deciding
+        how many candidates of this strategy to place this cycle."""
+        if not THROTTLE_FILE.exists():
+            return 1.0
+        try:
+            data = json.loads(THROTTLE_FILE.read_text())
+            return data.get(f"strategy_{strategy}", {}).get("frequency_multiplier", 1.0)
+        except Exception:
+            return 1.0
 
     @staticmethod
     def get_mode(engine: str) -> str:

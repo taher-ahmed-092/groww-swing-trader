@@ -95,6 +95,15 @@ class PatternMatcher:
         else:
             summary = "Memory recall: no strong precedent either way"
 
+        try:
+            from src.memory.company_dossier import dossier_store
+
+            dossier_summary = dossier_store.summarize_for_prompt(symbol)
+            if dossier_summary and "no trade history" not in dossier_summary:
+                summary = f"{summary} | {dossier_summary}"
+        except Exception:
+            pass
+
         return {"adjustment": adjustment, "matches": match_list, "summary": summary}
 
     def _empty(self) -> dict:

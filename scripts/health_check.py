@@ -126,7 +126,24 @@ def main() -> int:
         os.makedirs(d, exist_ok=True)
     results.append(("data/ and logs/ dirs", True, "ensured"))
 
-    # 6. Summary table.
+    # 6. Job telemetry — warn (not fail) if any scheduled job's recent failure
+    # rate or avg duration is unhealthy (Fix 4). A warning, not a hard check:
+    # missing telemetry (fresh install) must not fail the whole health check.
+    unhealthy_jobs: list[dict] = []
+    try:
+        from src.analytics.job_telemetry import get_unhealthy_jobs
+
+        unhealthy_jobs = get_unhealthy_jobs()
+        detail = ("; ".join(f"{j['job_name']} (fail={j['failure_rate']:.0%}, "
+                             f"avg={j['avg_duration_s']:.0f}s)" for j in unhealthy_jobs)
+                  if unhealthy_jobs else "no unhealthy jobs")
+        # Warning, not a hard fail: doesn't gate all_ok/paper-mode-safety, unlike
+        # the checks above — a slow/flaky scheduled job shouldn't block startup.
+        results.append(("Job telemetry healthy (warning only)", True, detail))
+    except Exception as exc:  # noqa: BLE001
+        results.append(("Job telemetry healthy (warning only)", True, f"unavailable: {exc}"))
+
+    # 7. Summary table.
     table = Table(title="groww-swing-trader health check")
     table.add_column("Check", style="cyan", no_wrap=True)
     table.add_column("Status")

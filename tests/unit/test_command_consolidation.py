@@ -20,9 +20,10 @@ def test_final_command_count_16():
     # /trades /learn /chart /mode /trade /regime /brief /watchlist /alert
     # /pause /kill /reset_kill /dashboard) lists 17 commands despite the "16"
     # header label — the concrete list is the ground truth. Later sessions
-    # added /flows, /diagnose, and /health_check on top of that 17.
+    # added /flows, /diagnose, and /health_check on top of that 17, and this
+    # session added /jobs (job telemetry) and /stock (company dossier).
     h = _handler()
-    assert len(h._MENU) == 20
+    assert len(h._MENU) == 22
 
 
 def test_old_commands_redirect():
