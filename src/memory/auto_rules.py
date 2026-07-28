@@ -102,6 +102,8 @@ class AutoRuleExtractor:
                 "confidence": 0.75,
             })
 
+        self._apply_dossier_rules(stock_vetoes, stock_boosts)
+
         rules = {
             "stock_vetoes": stock_vetoes,
             "stock_boosts": stock_boosts,
@@ -115,6 +117,44 @@ class AutoRuleExtractor:
         AUTO_RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
         AUTO_RULES_FILE.write_text(json.dumps(rules, indent=2))
         return rules
+
+    DOSSIER_MIN_TRADES = 8
+    DOSSIER_VETO_WR = 30.0
+    DOSSIER_BOOST_WR = 65.0
+
+    @classmethod
+    def _apply_dossier_rules(cls, stock_vetoes: dict, stock_boosts: dict) -> None:
+        """Scans company dossiers directly (independent of KB pattern confidence)
+        for a stock-specific track record strong enough to act on: "we always
+        lose on WIPRO" or "we usually win on AJANTPHARM" — the system learning
+        and acting on its own per-stock history without a human prompting it."""
+        try:
+            from src.memory.company_dossier import dossier_store
+
+            for dossier in dossier_store.search():
+                agg = dossier.get("aggregates", {})
+                total = agg.get("total_trades", 0)
+                if total < cls.DOSSIER_MIN_TRADES:
+                    continue
+                symbol = dossier.get("symbol")
+                if not symbol:
+                    continue
+                wr = agg.get("win_rate", 50.0)
+                wins, losses = agg.get("wins", 0), agg.get("losses", 0)
+                if wr < cls.DOSSIER_VETO_WR:
+                    existing = stock_vetoes.get(symbol, {})
+                    existing["reason"] = f"Dossier: {wins}W/{total}t ({wr:.0f}% WR)"
+                    existing["confidence"] = round(1 - wr / 100, 2)
+                    existing["source"] = "dossier"
+                    stock_vetoes[symbol] = existing
+                elif wr > cls.DOSSIER_BOOST_WR:
+                    stock_boosts[symbol] = {
+                        "bonus": min(1.5, wr / 100),
+                        "reason": f"Dossier: {wins}W/{total}t ({wr:.0f}% WR)",
+                        "source": "dossier",
+                    }
+        except Exception:
+            pass
 
     @staticmethod
     def _load_drifted_pattern_ids() -> set[str]:

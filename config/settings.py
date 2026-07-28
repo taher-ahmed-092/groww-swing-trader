@@ -1,3 +1,5 @@
+import os
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -100,6 +102,20 @@ class Settings(BaseSettings):
         if self.live_trading_enabled:
             return False
         return self.paper_demo_mode or not self.has_anthropic_key
+
+    @property
+    def effective_trading_mode(self) -> str:
+        """conserve | balanced | rogue — the mode used when no runtime
+        override file exists (see src/trading/modes.get_current_mode).
+
+        Live trading is always conservative by default; paper/demo trading
+        defaults to rogue for faster learning, UNLESS the user explicitly
+        set TRADING_MODE in the environment/.env, which always wins."""
+        if "TRADING_MODE" in os.environ:
+            return self.trading_mode
+        if self.broker_mode == "live":
+            return "balanced"
+        return "rogue"
 
     @property
     def mode_label(self) -> str:

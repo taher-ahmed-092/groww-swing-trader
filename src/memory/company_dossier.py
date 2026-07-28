@@ -215,3 +215,77 @@ class DossierStore:
 
 # Module-level singleton for convenient reuse across call sites.
 dossier_store = DossierStore()
+
+RECOVERY_CANDIDATES_FILE = Path("data/cache/dossier_recovery_candidates.json")
+
+
+def find_recovery_candidates(fetcher=None) -> list[str]:
+    """Regime-aware dossier warm-up (run once at startup during market
+    hours): for every dossier whose LAST trade was a LOSS, compares its
+    last-recorded technical snapshot against a freshly computed one — if the
+    stock has moved from DOWNTREND to UPTREND, or RSI has recovered out of
+    oversold (<35 -> >40), it's flagged as a recovery candidate. Mirrors how
+    a real trader reasons: "I lost on this last week, but it's turning —
+    worth another look." Returns the flagged symbol list and persists it to
+    RECOVERY_CANDIDATES_FILE for ScoutAgent to read during today's scan."""
+    if fetcher is None:
+        from src.data.fetcher import MarketDataFetcher
+
+        fetcher = MarketDataFetcher()
+    from src.agents.technical.indicators import compute_indicators
+
+    candidates: list[str] = []
+    store = dossier_store
+    if not store.base_dir.exists():
+        return candidates
+
+    for path in store.base_dir.glob("*.json"):
+        try:
+            dossier = json.loads(path.read_text())
+        except Exception:
+            continue
+        trade_history = dossier.get("trade_history") or []
+        if not trade_history or trade_history[-1].get("outcome") != "LOSS":
+            continue
+        symbol = dossier.get("symbol")
+        if not symbol:
+            continue
+        snapshots = dossier.get("technical_snapshots") or []
+        last_snapshot = snapshots[-1] if snapshots else {}
+
+        try:
+            df = fetcher.get_price_history(symbol, period="6mo")
+            if df is None or len(df) < 30:
+                continue
+            current = compute_indicators(df)
+        except Exception:
+            continue
+
+        was_downtrend = last_snapshot.get("trend") == "DOWNTREND"
+        now_uptrend = current.get("trend") == "UPTREND"
+        was_oversold = (last_snapshot.get("rsi_14") or 100) < 35
+        rsi_recovered = (current.get("rsi_14") or 0) > 40
+
+        if (was_downtrend and now_uptrend) or (was_oversold and rsi_recovered):
+            candidates.append(symbol)
+
+    try:
+        RECOVERY_CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RECOVERY_CANDIDATES_FILE.write_text(json.dumps({
+            "generated_at": _now_iso(), "symbols": candidates,
+        }))
+    except OSError:
+        pass
+    return candidates
+
+
+def get_cached_recovery_candidates() -> set[str]:
+    """Reads today's recovery-candidate list written by find_recovery_candidates()
+    at startup. Empty set (never raises) if the cache is missing/stale-format."""
+    if not RECOVERY_CANDIDATES_FILE.exists():
+        return set()
+    try:
+        data = json.loads(RECOVERY_CANDIDATES_FILE.read_text())
+        return set(data.get("symbols") or [])
+    except Exception:
+        return set()

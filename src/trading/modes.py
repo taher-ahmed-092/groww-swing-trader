@@ -67,7 +67,7 @@ def get_current_mode() -> TradingModeConfig:
     try:
         from config.settings import settings
 
-        return get_mode_config(getattr(settings, "trading_mode", DEFAULT_MODE))
+        return get_mode_config(getattr(settings, "effective_trading_mode", DEFAULT_MODE))
     except Exception:
         return MODES[DEFAULT_MODE]
 

@@ -160,6 +160,18 @@ def main() -> int:
 
         if market_open:
             console.print("[cyan]Market is OPEN — running immediate scan…[/]")
+            # Regime-aware dossier warm-up (Fix 3c): re-check stocks we lost on
+            # last time for a favorable technical shift before today's scan runs,
+            # so ScoutAgent's DOSSIER_RECOVERY_CANDIDATE boost has fresh data.
+            try:
+                from src.memory.company_dossier import find_recovery_candidates
+
+                recovered = find_recovery_candidates()
+                if recovered:
+                    console.print(f"[cyan]Dossier warm-up: {len(recovered)} recovery candidate(s): "
+                                  f"{', '.join(recovered[:10])}[/]")
+            except Exception as exc:
+                console.print(f"[yellow]Dossier warm-up failed: {exc}[/]")
             # Timeouts raised (was 120s/180s): a full --scan fetches daily+weekly
             # history, relative-strength vs Nifty, and affordability checks across
             # 241 watchlist symbols — even with the fetcher cache + parallel scoring

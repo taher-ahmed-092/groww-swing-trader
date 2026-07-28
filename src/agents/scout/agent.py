@@ -419,6 +419,19 @@ class ScoutAgent:
         except Exception:
             pass
 
+        # Regime-aware dossier warm-up (Fix 3c): a stock we lost on last time
+        # whose technicals have since turned favorable gets a small nudge —
+        # "I lost on this last week, but it's recovering — worth another look."
+        try:
+            from src.memory.company_dossier import get_cached_recovery_candidates
+
+            if symbol in get_cached_recovery_candidates():
+                score += 0.5
+                flags.append("DOSSIER_RECOVERY_CANDIDATE")
+                reasons.append("dossier: recovering from prior loss — technicals turned favorable")
+        except Exception:
+            pass
+
         return {
             "symbol": symbol,
             "name": meta["name"],

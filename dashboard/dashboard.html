@@ -52,12 +52,6 @@ body{
 .warp-flash.active{animation:warpFlash .5s ease}
 @keyframes warpFlash{0%{opacity:0}30%{opacity:.5}100%{opacity:0}}
 
-.tilt-btn{position:fixed;bottom:20px;left:20px;z-index:50;background:var(--panel-bg);
-  backdrop-filter:blur(10px);border:1px solid var(--panel-border);border-radius:999px;
-  padding:10px 18px;color:var(--text);font-family:var(--font-display);font-size:13px;
-  cursor:pointer;font-weight:700}
-.tilt-btn.hidden{display:none}
-
 #killswitch-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:600;
   background:var(--red);color:#fff;text-align:center;padding:10px;font-weight:700;
   font-family:var(--font-display)}
@@ -354,7 +348,6 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 <div id="flight-layer"></div>
 <div class="warp-flash" id="warp-flash"></div>
 <div id="killswitch-banner">🚨 KILL SWITCH ACTIVE — all trading halted</div>
-<button id="enable-tilt" class="tilt-btn">🎮 Enable Tilt</button>
 
 <div id="lesson-modal" class="lesson-modal hidden">
   <div class="lesson-modal__card">
@@ -678,20 +671,7 @@ class SkyBackground{
 }
 window.__sky=new SkyBackground(document.getElementById('sky-bg'));
 
-// ── Gyroscope tilt ──
-document.getElementById('enable-tilt').addEventListener('click',async()=>{
-  if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
-    try{const perm=await DeviceOrientationEvent.requestPermission();if(perm==='granted')startTilt();}catch(e){}
-  }else{startTilt();}
-  document.getElementById('enable-tilt').classList.add('hidden');
-});
-function startTilt(){
-  window.addEventListener('deviceorientation',e=>{
-    const tiltX=Math.max(-1,Math.min(1,(e.gamma||0)/30));
-    const tiltY=Math.max(-1,Math.min(1,((e.beta||0)-45)/30));
-    if(window.__sky){window.__sky.tiltX=tiltX;window.__sky.tiltY=tiltY;}
-  });
-}
+// ── Desktop mouse parallax (phone tilt removed — desktop only) ──
 document.addEventListener('mousemove',e=>{
   if(window.__sky){
     window.__sky.tiltX=(e.clientX/innerWidth-0.5)*2;
@@ -1429,7 +1409,7 @@ function updateDashboard(d){
 // ── Click-anywhere plane crash ──
 let lastCrash=0;
 document.addEventListener('click',(e)=>{
-  if(e.target.closest('button, a, .knowledge-entry, .lesson-modal, #enable-tilt, input, select'))return;
+  if(e.target.closest('button, a, .knowledge-entry, .lesson-modal, input, select'))return;
   const now=Date.now();
   if(now-lastCrash<300)return;
   lastCrash=now;

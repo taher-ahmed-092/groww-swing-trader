@@ -33,6 +33,7 @@ _VALID_FLAGS = {
     "HARD_REJECTED_FUNDAMENTAL", "TECHNICAL_SKIP",
     "SUPERTREND_BEARISH", "SELLING_PRESSURE", "BELOW_ALL_SUPPORTS",
     "ML_JUDGE_DISAGREEMENT", "COSTS_EAT_EDGE", "COSTS_MINIMUM_NOT_MET",
+    "RF_CONFIRMED_RSI_PENALTY",
 }
 
 APPROVAL_THRESHOLD = 7.5  # out of 10
@@ -81,6 +82,41 @@ class LLMJudge:
         if indicators.get("price_vs_vwap") == "BELOW" and indicators.get("nearest_pivot_level") == "BELOW_S1":
             flags.append("BELOW_ALL_SUPPORTS")
         return flags
+
+    @staticmethod
+    def _rf_confirmed_rsi_penalty(technical: dict) -> float:
+        """Converts a confirmed RF insight into immediate judge action: once
+        the Random Forest's own feature importance says RSI matters (>0.3 —
+        a confirmed signal, not noise), an entry landing in the known-loss
+        zone (RSI>65 or <35) inside a choppy ADX regime gets an extra -0.5
+        penalty applied directly to the judge's overall score, rather than
+        waiting for the next adaptive-threshold cycle to react to it."""
+        try:
+            from src.ml.random_forest_model import RandomForestModel
+
+            importance = RandomForestModel().get_feature_importance()
+        except Exception:
+            return 0.0
+        if importance.get("rsi", 0) <= 0.3:
+            return 0.0
+
+        indicators = technical.get("indicators", {}) or {}
+        rsi = indicators.get("rsi_14")
+        adx_signal = indicators.get("adx_signal") or technical.get("adx_signal")
+        if rsi is None or adx_signal != "CHOPPY":
+            return 0.0
+        if rsi > 65 or rsi < 35:
+            try:
+                from src.analytics.strategy_scorecard import log_adaptation
+
+                log_adaptation(
+                    "rf_confirmed_penalty",
+                    f"RSI {rsi:.1f} in known-loss zone + CHOPPY ADX — judge penalty -0.5 applied",
+                    f"RF rsi_importance={importance.get('rsi', 0):.2f}")
+            except Exception:
+                pass
+            return -0.5
+        return 0.0
 
     def _evaluate_pairs_trade(self, state: TradeState, technical: dict) -> dict:
         """Pairs trades are pre-screened by PairsTradingStrategy (correlation >= 0.70,
@@ -205,11 +241,15 @@ class LLMJudge:
             mode.judge_threshold - 1.5,
             min(mode.judge_threshold + 1.5, adaptive_threshold)), 2)
 
+        rf_penalty = self._rf_confirmed_rsi_penalty(technical)
+
         if settings.effective_demo_mode:
             fund = fundamental.get("score", 0) or 0
             tech = technical.get("score", 0) or 0
-            overall = round((fund * 0.5 + tech * 0.5) * 10, 2)
+            overall = round(max(0.0, (fund * 0.5 + tech * 0.5) * 10 + rf_penalty), 2)
             flags = ["DEMO_MODE"] + cost_margin_flags
+            if rf_penalty:
+                flags.append("RF_CONFIRMED_RSI_PENALTY")
             if manually_requested:
                 flags.append("MANUALLY_REQUESTED")
             return {
@@ -341,6 +381,11 @@ class LLMJudge:
             if rf_prob is not None:
                 reasoning_bits += f" | RF model: {rf_prob:.0%} win probability"
             verdict["reasoning"] = reasoning_bits
+
+        if rf_penalty:
+            overall = max(0.0, overall + rf_penalty)
+            if "RF_CONFIRMED_RSI_PENALTY" not in flags:
+                flags.append("RF_CONFIRMED_RSI_PENALTY")
 
         verdict["flags"] = flags
         verdict["overall_score"] = round(overall, 4)

@@ -146,6 +146,20 @@ class _ScanLock:
             pass
 
 
+def _check_pre_open(job_name: str) -> None:
+    """Fix 5: NSECalendar.is_market_open() is a date-only check (weekday +
+    holiday calendar) — it says nothing about time-of-day, so a job scheduled
+    at 9:00 AM (before the 9:15 AM open) can run against yesterday's closing
+    prices while believing it has live data. Logs a warning so this is
+    visible rather than silently treating pre-open data as live."""
+    now_ist = datetime.now(IST)
+    mins = now_ist.hour * 60 + now_ist.minute
+    if now_ist.weekday() < 5 and 9 * 60 <= mins < 9 * 60 + 15:
+        console.print(
+            f"[yellow][JOB] {job_name}: pre-open run (09:00-09:15 IST) — "
+            "using previous close prices, not live.[/yellow]")
+
+
 def _kill_switch() -> bool:
     return Path(LIMITS.kill_switch_file).exists()
 
@@ -250,6 +264,7 @@ def daily_premarket_job() -> None:
     if _kill_switch() or _is_paused():
         return
     console.print("[cyan][JOB] daily_premarket_job starting[/cyan]")
+    _check_pre_open("daily_premarket_job")
     notifier = TelegramNotifier()
 
     # Reliability: skip closed days; warn on an expired Groww token (live mode).
@@ -400,8 +415,31 @@ def market_open_pairs_job() -> None:
             f"Judge: {verdict.get('overall_score', 0):.1f}/10"
         )
     else:
-        reasons = result.get("risk_check", {}).get("reasons", [])
-        console.print(f"[yellow][JOB] market_open_pairs_job rejected: {reasons}[/yellow]")
+        risk_reasons = result.get("risk_check", {}).get("reasons", [])
+        if not verdict.get("approved"):
+            blocker = f"judge {verdict.get('overall_score', 0):.1f}<5.5"
+        else:
+            blocker = "; ".join(risk_reasons) or "judge not approved"
+        console.print(
+            f"[yellow][JOB] market_open_pairs_job: 0/1 cleared. Top rejection: "
+            f"{best['buy_symbol']} ({blocker})[/yellow]")
+
+
+def _rejection_detail(symbol: str, gate: str, detail: str) -> dict:
+    return {"symbol": symbol, "gate": gate, "detail": detail}
+
+
+def _log_top_rejections(job_label: str, total: int, rejections: list[dict]) -> None:
+    """Replaces the useless 'no candidate cleared the pipeline' log line with
+    the actual blocker per candidate — e.g. 'BIOCON (HARD_REJECTED_FUNDAMENTAL:
+    ROCE 3.61%), GLAND (judge 5.2<5.5)' — so a human can diagnose what's
+    actually blocking the first real trade without re-running with debug flags."""
+    if not rejections:
+        console.print(f"[dim][JOB] {job_label}: {total}/{total} cleared[/dim]")
+        return
+    top = rejections[:3]
+    summary = ", ".join(f"{r['symbol']} ({r['gate']}: {r['detail']})" for r in top)
+    console.print(f"[dim][JOB] {job_label}: 0/{total} cleared. Top rejections: {summary}[/dim]")
 
 
 def market_open_scan_job() -> None:
@@ -423,26 +461,45 @@ def market_open_scan_job() -> None:
         return
 
     ctx = MarketContext().get_nifty_context()
+    rejections: list[dict] = []
     for cand in candidates:
         symbol = cand["symbol"]
         state = get_initial_state(symbol)
         state["sector"] = cand.get("sector", "")
         state["market_context"] = ctx
-        state["fundamental_verdict"] = FundamentalAgent().analyze(state)
+        fundamental = FundamentalAgent().analyze(state)
+        state["fundamental_verdict"] = fundamental
+        if fundamental.get("hard_rejected"):
+            data = fundamental.get("data") or {}
+            roce = data.get("roce_pct")
+            rejections.append(_rejection_detail(
+                symbol, "HARD_REJECTED_FUNDAMENTAL",
+                f"ROCE {roce}%" if roce is not None else (fundamental.get("reasoning") or "")[:60]))
+            continue
 
         technical = TechnicalAgent().analyze(state)
         state["technical_verdict"] = technical
-        if not (technical.get("proceed") and (technical.get("score") or 0) >= LIMITS.min_confidence):
+        tech_score = technical.get("score") or 0
+        if not (technical.get("proceed") and tech_score >= LIMITS.min_confidence):
+            rejections.append(_rejection_detail(
+                symbol, "TECHNICAL", f"score {tech_score:.2f} < {LIMITS.min_confidence:.2f}"))
             continue
 
         judge = LLMJudge().evaluate(state)
         state["judge_verdict"] = judge
         if not judge.get("approved"):
+            from src.trading.modes import get_current_mode
+
+            rejections.append(_rejection_detail(
+                symbol, "JUDGE",
+                f"judge {judge.get('overall_score', 0):.1f}<{get_current_mode().judge_threshold}"))
             continue
 
         risk = RiskChecker().check(state)
         state["risk_check"] = risk
         if not risk.get("approved"):
+            rejections.append(_rejection_detail(
+                symbol, "RISK", "; ".join(risk.get("reasons", []))[:60]))
             continue
 
         state["trade_decision"] = {
@@ -459,7 +516,7 @@ def market_open_scan_job() -> None:
             notifier.send_trade_card(state)
             return
 
-    console.print("[dim][JOB] market_open_scan_job: no candidate cleared the pipeline[/dim]")
+    _log_top_rejections("market_open_scan_job", len(candidates), rejections)
 
 
 def daily_postmarket_job() -> None:
@@ -1165,6 +1222,15 @@ if __name__ == "__main__":
         console.print("[bold red]Another runner instance is already running — exiting.[/bold red]")
         sys.exit(1)
     console.print(f"[bold green]🚀 groww-swing-trader running | Mode: {settings.broker_mode}[/bold green]")
+    from src.trading.modes import get_current_mode
+
+    _active_mode = get_current_mode()
+    if settings.broker_mode == "paper" and "TRADING_MODE" not in os.environ:
+        console.print(
+            f"[cyan]Paper mode: using ROGUE judge thresholds ({_active_mode.judge_threshold}/10) "
+            "for faster learning. Set TRADING_MODE=balanced to override.[/cyan]")
+    else:
+        console.print(f"[cyan]Trading mode: {_active_mode.name} (judge threshold {_active_mode.judge_threshold}/10)[/cyan]")
     console.print(
         "[green]Scheduler active. Jobs: weekly scan (Sun 7pm), daily check (Mon-Fri 9am), "
         "intraday learning (Mon-Fri 9:30am open / 3:15pm close), "
