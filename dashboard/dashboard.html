@@ -249,10 +249,11 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
   </div>
 
   <div class="stat-grid">
-    <div class="stat-tile"><div class="stat-tile__num" id="metric-trades">0</div><div class="stat-tile__label">Total Trades</div></div>
-    <div class="stat-tile"><div class="stat-tile__num" id="metric-wr">0%</div><div class="stat-tile__label">Win Rate</div></div>
-    <div class="stat-tile"><div class="stat-tile__num" id="metric-pnl">₹0</div><div class="stat-tile__label">Total P&amp;L</div></div>
-    <div class="stat-tile"><div class="stat-tile__num" id="metric-kb">0</div><div class="stat-tile__label">Patterns Learned</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-trades">0</div><div class="stat-tile__label">Real pipeline trades</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-wr">0%</div><div class="stat-tile__label">Real pipeline win rate</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-pnl">₹0</div><div class="stat-tile__label">Real pipeline P&amp;L</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-kb">0</div><div class="stat-tile__label">KB patterns (all)</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-kb-highconf">0</div><div class="stat-tile__label">High-confidence (&ge;0.6)</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-forced">0</div><div class="stat-tile__label">Closed Today (all eras)</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-open-positions">0</div><div class="stat-tile__label">Open Positions</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-simwr">0%</div><div class="stat-tile__label">Sim Win Rate</div></div>
@@ -316,12 +317,14 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
   <div class="room__sub">24/7 learning — the system never stops training</div>
   <div class="panel">
     <div class="engine-grid">
-      <div class="stat-tile"><div class="stat-tile__num" id="forced-total">0</div><div class="stat-tile__label">Forced Trades</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="forced-opened">0</div><div class="stat-tile__label">Opened Today</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="forced-total">0</div><div class="stat-tile__label">Closed Today</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="forced-open-now">0</div><div class="stat-tile__label">Open Now</div></div>
       <div class="stat-tile"><div class="stat-tile__num" id="sim-total">0</div><div class="stat-tile__label">Simulations</div></div>
       <div class="stat-tile"><div class="stat-tile__num" id="replay-covered">0</div><div class="stat-tile__label">Replay Patterns</div></div>
     </div>
     <div class="engine-grid" style="margin-top:12px">
-      <div class="stat-tile"><div class="stat-tile__num" id="pf-num">—</div><div class="stat-tile__label">Profit Factor</div></div>
+      <div class="stat-tile"><div class="stat-tile__num" id="pf-num">—</div><div class="stat-tile__label">Profit Factor (real, post-fix era)</div></div>
       <div class="stat-tile"><div class="stat-tile__num" id="dd-num">—</div><div class="stat-tile__label">Max Drawdown %</div></div>
       <div class="stat-tile"><div class="stat-tile__num" id="trend-badge" style="font-size:16px">—</div><div class="stat-tile__label">Strategy Trend</div></div>
     </div>
@@ -330,6 +333,10 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     </div>
     <div class="xgb-track"><div class="xgb-fill" id="xgb-fill"></div></div>
     <div class="thresholds-mini" id="thresholds-grid"></div>
+    <div style="margin-top:16px">
+      <div class="room__sub" style="font-weight:700;color:var(--text);margin-bottom:6px">🩺 Loss Reason Breakdown</div>
+      <div id="loss-reason-breakdown" style="font-family:var(--font-mono);font-size:12px;color:var(--text-muted)"></div>
+    </div>
 
     <div style="margin-top:24px">
       <div class="room__sub" style="font-weight:700;color:var(--text);margin-bottom:10px">🤖 AI Models Active</div>
@@ -866,7 +873,8 @@ function updateDashboard(d){
   countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
   countUp(document.getElementById('metric-wr'),s.win_rate||0,1200,'','%',1);
   countUp(document.getElementById('metric-pnl'),s.total_pnl_inr||0,1200,'₹','',2);
-  countUp(document.getElementById('metric-kb'),(d.knowledge||[]).length,800);
+  countUp(document.getElementById('metric-kb'),learning.kb_patterns||(d.knowledge||[]).length,800);
+  countUp(document.getElementById('metric-kb-highconf'),learning.kb_patterns_high_confidence||0,800);
   countUp(document.getElementById('metric-forced'),forced.total||0,600);
   countUp(document.getElementById('metric-open-positions'),(d.positions||[]).length,600);
   countUp(document.getElementById('metric-simwr'),intra.win_rate||0,600,'','%',0);
@@ -902,7 +910,9 @@ function updateDashboard(d){
   renderConstellation(d.knowledge||[]);
   updateKnowledge(d.knowledge||[]);
 
+  countUp(document.getElementById('forced-opened'),forced.opened_today||forced.total||0,600);
   countUp(document.getElementById('forced-total'),forced.total||0,600);
+  countUp(document.getElementById('forced-open-now'),forced.currently_open||0,600);
   countUp(document.getElementById('sim-total'),intra.total||0,600);
   countUp(document.getElementById('replay-covered'),learning.replay_patterns||0,600);
 
@@ -912,6 +922,16 @@ function updateDashboard(d){
 
   updateThresholds(adaptive,regime);
   updateLossDiagnosis(adaptive);
+
+  const lrbEl=document.getElementById('loss-reason-breakdown');
+  if(lrbEl){
+    const lrb=d.loss_reason_breakdown||{};
+    const total=Object.values(lrb).reduce((a,b)=>a+b,0);
+    lrbEl.innerHTML=total?Object.entries(lrb).filter(([,n])=>n>0)
+      .sort((a,b)=>b[1]-a[1])
+      .map(([cat,n])=>`${cat}: ${n} (${(n/total*100).toFixed(0)}%)`).join('<br>')
+      :'No categorized losses yet.';
+  }
 
   const fiiDii=d.fii_dii||{};
   const fdEl=document.getElementById('fii-dii-badge');

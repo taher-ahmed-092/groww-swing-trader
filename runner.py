@@ -59,6 +59,56 @@ _PAUSE_FILE = os.path.join("data", "cache", "trading_paused.txt")
 _LOCK_FILE = os.path.join("data", "cache", "runner.lock")
 
 
+# ── Misfire resilience (Fix 7) ──────────────────────────────────────────────
+# A laptop sleeping through APScheduler ticks silently drops market-hours
+# work (missed intraday scans, missed forced-trade volume) until the next
+# scheduled tick — which itself may be hours away. These helpers let a
+# handful of frequent market-hours jobs record when they last ran, so
+# startup can detect a gap and run them immediately (catch-up) instead of
+# waiting for the next cron tick.
+def _last_run_marker(name: str) -> Path:
+    return Path("data/cache") / f"last_run_{name}.txt"
+
+
+def _mark_last_run(name: str) -> None:
+    try:
+        marker = _last_run_marker(name)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(datetime.now(IST).isoformat())
+    except OSError:
+        pass
+
+
+def _hours_since_last_run(name: str) -> float | None:
+    marker = _last_run_marker(name)
+    if not marker.exists():
+        return None
+    try:
+        last = datetime.fromisoformat(marker.read_text().strip())
+        return (datetime.now(IST) - last).total_seconds() / 3600
+    except Exception:
+        return None
+
+
+def _with_marker(func, name: str):
+    """Wrap a job so it stamps its own last-run marker on completion —
+    used both for the scheduled job and the startup catch-up check."""
+    def wrapped():
+        func()
+        _mark_last_run(name)
+    wrapped.__name__ = f"{func.__name__}_tracked"
+    return wrapped
+
+
+# (job, marker name, expected interval in hours) — the frequent market-hours
+# jobs where a missed laptop-sleep tick actually costs real learning volume.
+_CATCHUP_JOBS = [
+    ("intraday_scan", 0.5),
+    ("forced_trade", 0.25),
+    ("continuous_sim", 0.5),
+]
+
+
 def _kill_switch() -> bool:
     return Path(LIMITS.kill_switch_file).exists()
 
@@ -793,6 +843,41 @@ def deep_replay_job() -> None:
     rf_train_job()
 
 
+def regime_replay_job() -> None:
+    """Nightly 10:45 PM IST — regime-stratified replay (Fix 3): rotates
+    through BULL_TRENDING/BEAR_TRENDING/RANGE_BOUND/TRANSITIONAL, always
+    picking whichever regime is furthest below its 100-record target, so
+    rare historical regimes (e.g. a real bear stretch) stop being starved
+    by the regime-agnostic rotation's natural skew toward common regimes."""
+    if _kill_switch():
+        return
+    from src.learning.historical_replay import HistoricalReplayEngine
+
+    engine = HistoricalReplayEngine()
+    regime = engine.next_regime_to_replay()
+    result = engine.replay_regime_stratified(regime, n_stocks=25, n_days_each=3)
+    console.print(f"[cyan][JOB] regime replay ({regime}): {result}[/cyan]")
+
+
+def _train_calibrated_ensemble() -> None:
+    """Trains the calibrated RF+LogReg ensemble (Fix 5) right after the raw
+    Random Forest — same simulation-data gate, so if one has enough samples
+    the other does too."""
+    from src.ml.calibration import CalibratedEnsemble
+
+    result = CalibratedEnsemble().train()
+    if result.get("trained"):
+        scores = ", ".join(f"{k}={v}" for k, v in result.get("brier_scores", {}).items())
+        console.print(f"[cyan][JOB] Calibrated ensemble trained: {result}[/cyan]")
+        TelegramNotifier().send_message(
+            "🎯 *Calibrated Ensemble Updated*\n"
+            f"Trained on {result['n_samples']} sim trades\n"
+            f"Brier scores (lower = better calibrated): {scores}"
+        )
+    else:
+        console.print(f"[yellow][JOB] Calibrated ensemble not trained: {result}[/yellow]")
+
+
 def rf_train_job() -> None:
     """Sunday 9:30 PM IST (also called after deep_replay_job, which is when
     enough fresh simulation data exists) — train the Random Forest model."""
@@ -812,6 +897,7 @@ def rf_train_job() -> None:
             f"Key signals: {top_f}\n"
             "_(Combined with judge for better decisions)_"
         )
+        _train_calibrated_ensemble()
     else:
         console.print(f"[yellow][JOB] Random Forest not trained: {result}[/yellow]")
 
@@ -1056,7 +1142,7 @@ if __name__ == "__main__":
 
         sanity = check_capital_sanity()
         if not sanity.get("ok"):
-            console.print(f"[bold red]⚠️  {sanity['message']}[/bold red]")
+            console.print(f"[dim]ℹ️  {sanity['message']}[/dim]")
     except Exception as exc:
         console.print(f"[yellow]Capital sanity check failed: {exc}[/yellow]")
 
@@ -1083,7 +1169,10 @@ if __name__ == "__main__":
     except Exception as exc:
         console.print(f"[yellow]Engine throttle re-eval failed: {exc}[/yellow]")
 
-    scheduler = BackgroundScheduler(timezone=TZ)
+    scheduler = BackgroundScheduler(
+        timezone=TZ,
+        job_defaults={"coalesce": True, "misfire_grace_time": 900},
+    )
     scheduler.add_job(weekly_research_job, "cron", day_of_week="sun", hour=19, minute=0)
     scheduler.add_job(daily_premarket_job, "cron", day_of_week="mon-fri", hour=9, minute=0)
     scheduler.add_job(market_open_pairs_job, "cron", day_of_week="mon-fri", hour=9, minute=20)
@@ -1097,23 +1186,51 @@ if __name__ == "__main__":
     scheduler.add_job(sunday_morning_batch_check, "cron", day_of_week="sun", hour=7, minute=0)
     scheduler.add_job(intraday_entry_job, "cron", day_of_week="mon-fri", hour=9, minute=30)
     scheduler.add_job(intraday_exit_job, "cron", day_of_week="mon-fri", hour=15, minute=15)
-    scheduler.add_job(intraday_scan_job, "cron", day_of_week="mon-fri", hour="9-14", minute="*/30")
+    scheduler.add_job(_with_marker(intraday_scan_job, "intraday_scan"), "cron",
+                       day_of_week="mon-fri", hour="9-14", minute="*/30")
     scheduler.add_job(midmorning_guarantee_job, "cron", day_of_week="mon-fri", hour=10, minute=30)
     scheduler.add_job(midday_guarantee_job, "cron", day_of_week="mon-fri", hour=12, minute=30)
     scheduler.add_job(afternoon_guarantee_job, "cron", day_of_week="mon-fri", hour=14, minute=0)
     scheduler.add_job(hourly_health_job, "cron", minute=0)
     scheduler.add_job(off_hours_replay_job, "cron", hour="*/2", minute=15)
     scheduler.add_job(deep_replay_job, "cron", hour=23, minute=30)
+    scheduler.add_job(regime_replay_job, "cron", hour=22, minute=45)
     scheduler.add_job(daily_lessons_job, "cron", hour=23, minute=0)
     scheduler.add_job(rf_train_job, "cron", day_of_week="sun", hour=21, minute=30)
-    scheduler.add_job(forced_trade_job, "cron", minute="*/15")
+    scheduler.add_job(_with_marker(forced_trade_job, "forced_trade"), "cron", minute="*/15")
     scheduler.add_job(forced_close_job, "cron", minute="7,22,37,52")
     scheduler.add_job(daily_forced_summary_job, "cron", day_of_week="mon-fri", hour=16, minute=0)
-    scheduler.add_job(continuous_sim_job, "cron", minute="*/30")
+    scheduler.add_job(_with_marker(continuous_sim_job, "continuous_sim"), "cron", minute="*/30")
     scheduler.add_job(drift_check_job, "cron", hour="*/6")
     scheduler.add_job(triday_health_check_job, "cron", day="*/3", hour=20, minute=0)
     scheduler.add_job(watchlist_validation_job, "cron", day=1, hour=8, minute=0)
     scheduler.add_job(nightly_engine_scorecard_job, "cron", hour=23, minute=15)
+
+    # Catch-up (Fix 7): a job whose last-run marker is older than its own
+    # interval, while the market is open right now, means a tick was missed
+    # (laptop sleep) — run it immediately rather than waiting up to its full
+    # interval for the next cron tick.
+    try:
+        from src.data.market_calendar import NSECalendar
+
+        market_open_now = NSECalendar().is_market_open()
+    except Exception:
+        market_open_now = False
+
+    if market_open_now:
+        _CATCHUP_FUNCS = {"intraday_scan": intraday_scan_job,
+                          "forced_trade": forced_trade_job,
+                          "continuous_sim": continuous_sim_job}
+        for name, interval_hours in _CATCHUP_JOBS:
+            age_hours = _hours_since_last_run(name)
+            if age_hours is not None and age_hours > interval_hours:
+                console.print(f"[yellow]catch-up: ran {name} (missed by {age_hours:.1f}h)[/yellow]")
+                try:
+                    _CATCHUP_FUNCS[name]()
+                    _mark_last_run(name)
+                except Exception as exc:
+                    console.print(f"[red]catch-up {name} failed: {exc}[/red]")
+
     scheduler.start()
 
     # Telegram connectivity check — sends a hello message if configured.

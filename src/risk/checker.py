@@ -63,25 +63,35 @@ def check_capital_sanity(portfolio_value_inr: float = DEFAULT_PORTFOLIO_VALUE_IN
     if not prices:
         return {"ok": True, "reason": "no priced sample stock to check"}
 
+    max_risk_inr = portfolio_value_inr * (LIMITS.max_risk_per_trade_pct / 100)
+    unaffordable = []
+    for symbol, price in prices.items():
+        risk_inr = round(1 * price * (LIMITS.stop_loss_pct / 100), 4)
+        if risk_inr > max_risk_inr:
+            unaffordable.append(symbol)
+
     worst_symbol = max(prices, key=prices.get)
     worst_price = prices[worst_symbol]
+    worst_risk_inr = round(1 * worst_price * (LIMITS.stop_loss_pct / 100), 4)
 
-    risk_inr = round(1 * worst_price * (LIMITS.stop_loss_pct / 100), 4)
-    max_risk_inr = portfolio_value_inr * (LIMITS.max_risk_per_trade_pct / 100)
-    if risk_inr <= max_risk_inr:
-        return {"ok": True, "worst_symbol": worst_symbol, "risk_inr": risk_inr,
+    if not unaffordable:
+        return {"ok": True, "worst_symbol": worst_symbol, "risk_inr": worst_risk_inr,
                 "max_risk_inr": max_risk_inr}
 
-    min_viable_capital = round(risk_inr / (LIMITS.max_risk_per_trade_pct / 100), 2)
+    # Correct behavior: unaffordable symbols are excluded from scoring (see
+    # ScoutAgent.is_affordable), not a reason to demand more capital — this
+    # check is informational only, downgraded from WARNING to INFO.
+    min_viable_capital = round(worst_risk_inr / (LIMITS.max_risk_per_trade_pct / 100), 2)
+    examples = ", ".join(unaffordable[:5])
     message = (
-        f"Paper capital ₹{portfolio_value_inr:,.0f} too small to size 1 share of "
-        f"{worst_symbol} (risk ₹{risk_inr:,.2f} > limit ₹{max_risk_inr:,.2f}). "
-        f"Minimum viable capital ≈ ₹{min_viable_capital:,.0f}."
+        f"{len(unaffordable)} sampled symbol(s) unaffordable at current paper capital "
+        f"₹{portfolio_value_inr:,.0f} ({examples}) — excluded from scoring."
     )
-    log.warning(message)
-    console.print(f"[bold red][RISK] {message}[/bold red]")
-    return {"ok": False, "worst_symbol": worst_symbol, "risk_inr": risk_inr,
+    log.info(message)
+    console.print(f"[dim][RISK] {message}[/dim]")
+    return {"ok": False, "worst_symbol": worst_symbol, "risk_inr": worst_risk_inr,
             "max_risk_inr": max_risk_inr, "min_viable_capital": min_viable_capital,
+            "unaffordable_count": len(unaffordable), "unaffordable_symbols": unaffordable,
             "message": message}
 
 
@@ -353,7 +363,7 @@ class RiskChecker:
         max_risk_inr = self.portfolio_value_inr * (LIMITS.max_risk_per_trade_pct / 100)
         if risk_inr > max_risk_inr:
             reasons.append(
-                f"risk {risk_inr} INR > max allowed {round(max_risk_inr, 4)} INR "
+                f"UNAFFORDABLE: risk {risk_inr} INR > max allowed {round(max_risk_inr, 4)} INR "
                 f"({LIMITS.max_risk_per_trade_pct}% of {self.portfolio_value_inr})"
             )
             return self._reject(reasons)

@@ -32,6 +32,14 @@ log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 REPLAY_CACHE = Path("data/cache/replay_progress.json")
 
+# Regime-stratified replay (Fix 3): the regime-agnostic rotation above skews
+# toward whatever regime the last few years actually were, leaving rarer
+# regimes (e.g. a real BEAR_TRENDING stretch) with far fewer learned patterns
+# than BULL_TRENDING/RANGE_BOUND. This targets each regime explicitly.
+REGIME_TARGETS = ("BULL_TRENDING", "BEAR_TRENDING", "RANGE_BOUND", "TRANSITIONAL")
+REGIME_REPLAY_PROGRESS_FILE = Path("data/cache/regime_replay_progress.json")
+REGIME_RECORDS_TARGET = 100
+
 
 class HistoricalReplayEngine:
     """Replays historical trading days to generate verified learning data.
@@ -208,13 +216,20 @@ class HistoricalReplayEngine:
 
     def _update_knowledge(self, symbol: str, tier: str, indicators: dict,
                           signal: dict, outcome: str, pnl_pct: float,
-                          description: str, date_str: str) -> bool:
-        """Confirm/seed a knowledge pattern from a verified replay outcome."""
+                          description: str, date_str: str,
+                          market_regime: str | None = None) -> bool:
+        """Confirm/seed a knowledge pattern from a verified replay outcome.
+        `market_regime`, when set (regime-stratified replay — see
+        replay_regime_stratified), namespaces the pattern_id so a pattern
+        learned specifically inside e.g. a historical BEAR_TRENDING window
+        is never silently merged with the regime-agnostic rotation's pattern
+        of the same tier/trend/RSI/ADX bucket."""
         rsi = indicators.get("rsi_14", 50) or 50
         trend = indicators.get("trend", "SIDEWAYS") or "SIDEWAYS"
         adx = indicators.get("adx_signal", "NEUTRAL") or "NEUTRAL"
         rsi_bucket = "high" if rsi > 60 else "mid" if rsi > 45 else "low"
-        pattern_id = f"replay-{tier}-{trend.lower()}-rsi{rsi_bucket}-adx{adx.lower()}"
+        regime_tag = f"regime{market_regime.lower()}-" if market_regime else ""
+        pattern_id = f"replay-{regime_tag}{tier}-{trend.lower()}-rsi{rsi_bucket}-adx{adx.lower()}"
 
         cache_key = f"{pattern_id}_{date.today()}"
         if cache_key in self._updated_today:
@@ -288,6 +303,156 @@ class HistoricalReplayEngine:
             REPLAY_CACHE.write_text(json.dumps(progress))
         except OSError:
             pass
+
+    # ── regime-stratified replay (Fix 3) ──────────────────────────────────────
+    @staticmethod
+    def _classify_nifty_window(return_pct: float, vol_pct: float) -> str:
+        """Lightweight, self-contained regime classifier over a trailing
+        20-session Nifty window (return % and daily-return volatility %).
+        Deliberately independent of RegimeDetector's live-data implementation
+        — this only ever runs against historical closes, and the 4 buckets
+        below are exactly the ones this method is asked to fill."""
+        if return_pct > 5 and vol_pct < 1.5:
+            return "BULL_TRENDING"
+        if return_pct < -5:
+            return "BEAR_TRENDING"
+        if abs(return_pct) < 2 and vol_pct < 1.5:
+            return "RANGE_BOUND"
+        return "TRANSITIONAL"
+
+    def find_regime_windows(self, target_regime: str, lookback_years: int = 5) -> list:
+        """Scans Nifty daily closes over `lookback_years` and returns the
+        dates where a trailing 20-session window classifies as `target_regime`."""
+        import yfinance as yf
+
+        try:
+            df = yf.Ticker("^NSEI").history(period=f"{lookback_years}y")
+        except Exception as exc:
+            log.debug("Nifty history fetch failed: %s", exc)
+            return []
+        if df is None or len(df) < 40:
+            return []
+
+        closes = df["Close"]
+        matches = []
+        for i in range(20, len(closes)):
+            window = closes.iloc[i - 20: i + 1]
+            ret_pct = float(window.iloc[-1] / window.iloc[0] - 1) * 100
+            daily_rets = window.pct_change().dropna()
+            vol_pct = float(daily_rets.std() * 100) if len(daily_rets) else 0.0
+            if self._classify_nifty_window(ret_pct, vol_pct) == target_regime:
+                matches.append(df.index[i])
+        return matches
+
+    def replay_regime_stratified(self, target_regime: str, n_stocks: int = 25,
+                                 n_days_each: int = 3) -> dict:
+        """Replays `n_stocks` at date windows where Nifty history was
+        classified as `target_regime`, tagging every learned pattern with
+        that regime (namespaced pattern_id — see _update_knowledge). Uses the
+        same overdue-first stock rotation as the regime-agnostic run_batch()
+        but its own progress file, so the two rotations don't starve each other."""
+        if target_regime not in REGIME_TARGETS:
+            return {"replayed": 0, "signals_found": 0, "wins": 0, "losses": 0,
+                    "patterns_added": 0, "regime": target_regime, "error": "unknown regime"}
+
+        windows = self.find_regime_windows(target_regime)
+        if not windows:
+            return {"replayed": 0, "signals_found": 0, "wins": 0, "losses": 0,
+                    "patterns_added": 0, "regime": target_regime}
+
+        stocks = self._pick_stocks_to_replay(n_stocks)
+        sample_dates = windows[-(n_days_each * 20):]  # bound work per call
+
+        signals_found = wins = losses = patterns_added = 0
+        for symbol in stocks:
+            tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
+            try:
+                df_full = self.fetcher.get_price_history(symbol, period="5y")
+                if df_full is None or len(df_full) < 60:
+                    continue
+                for target_date in sample_dates[:n_days_each]:
+                    try:
+                        idx = df_full.index.get_indexer([target_date], method="nearest")[0]
+                    except Exception:
+                        continue
+                    if idx < 50 or idx > len(df_full) - 6:
+                        continue
+                    df_at = df_full.iloc[: idx + 1]
+                    df_after = df_full.iloc[idx + 1: idx + 6]
+                    if len(df_after) < 3:
+                        continue
+
+                    indicators = compute_indicators(df_at)
+                    if indicators is None:
+                        continue
+                    entry_price = float(df_at["Close"].iloc[-1])
+                    stop_price = round(entry_price * (1 - LIMITS.stop_loss_pct / 100), 2)
+                    target_price = round(entry_price + (entry_price - stop_price) * 2.0, 2)
+
+                    signal = self._evaluate_signal(indicators, tier)
+                    if signal["action"] != "BUY":
+                        continue
+                    signals_found += 1
+
+                    outcome, exit_price, _days = self._check_actual_outcome(
+                        entry_price, stop_price, target_price,
+                        df_after["High"].tolist(), df_after["Low"].tolist(),
+                        df_after["Close"].tolist())
+                    wins += outcome == "WIN"
+                    losses += outcome != "WIN"
+                    pnl_pct = round((exit_price - entry_price) / entry_price * 100, 2)
+
+                    desc = self._build_pattern_description(symbol, indicators, signal, outcome, tier)
+                    date_str = str(target_date)[:10]
+                    if self._update_knowledge(symbol, tier, indicators, signal, outcome,
+                                              pnl_pct, desc, date_str, market_regime=target_regime):
+                        patterns_added += 1
+                time.sleep(0.3)
+            except Exception as exc:  # noqa: BLE001 — one bad symbol never sinks the batch
+                log.debug("Regime replay failed for %s (%s): %s", symbol, target_regime, exc)
+
+        self._update_regime_progress(target_regime, signals_found)
+        return {"replayed": len(stocks), "signals_found": signals_found, "wins": wins,
+                "losses": losses, "patterns_added": patterns_added, "regime": target_regime}
+
+    def _load_regime_progress(self) -> dict:
+        if REGIME_REPLAY_PROGRESS_FILE.exists():
+            try:
+                return json.loads(REGIME_REPLAY_PROGRESS_FILE.read_text())
+            except Exception:
+                pass
+        return {}
+
+    def _update_regime_progress(self, regime: str, new_records: int) -> None:
+        progress = self._load_regime_progress()
+        entry = progress.get(regime, {"records": 0, "last_run": None})
+        entry["records"] = entry.get("records", 0) + new_records
+        entry["last_run"] = date.today().isoformat()
+        progress[regime] = entry
+        try:
+            REGIME_REPLAY_PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            REGIME_REPLAY_PROGRESS_FILE.write_text(json.dumps(progress))
+        except OSError:
+            pass
+
+    def next_regime_to_replay(self) -> str:
+        """Rotates regimes: the one furthest below REGIME_RECORDS_TARGET goes
+        next (nightly job calls this once per run, per Fix 3's schedule)."""
+        progress = self._load_regime_progress()
+        return min(REGIME_TARGETS, key=lambda r: progress.get(r, {}).get("records", 0))
+
+    def get_regime_replay_stats(self) -> dict:
+        """Per-regime record counts vs REGIME_RECORDS_TARGET, for /learn."""
+        progress = self._load_regime_progress()
+        return {
+            regime: {
+                "records": progress.get(regime, {}).get("records", 0),
+                "target": REGIME_RECORDS_TARGET,
+                "complete": progress.get(regime, {}).get("records", 0) >= REGIME_RECORDS_TARGET,
+                "last_run": progress.get(regime, {}).get("last_run"),
+            }
+            for regime in REGIME_TARGETS
+        }
 
     def get_stats(self) -> dict:
         progress = self._load_progress()

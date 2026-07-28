@@ -24,6 +24,8 @@ import pandas as pd
 import yfinance as yf
 from rich.console import Console
 
+from config.risk_limits import LIMITS
+from config.settings import settings
 from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
 from src.data.watchlist import ALL_STOCKS, get_risk_params_for_tier, get_tier
@@ -56,6 +58,7 @@ class ScoutAgent:
         self.fetcher = MarketDataFetcher()
         self.lessons = LessonsRetriever()
         self.journal = TradingJournal()
+        self._unaffordable: list[str] = []
         os.makedirs(_CACHE_DIR, exist_ok=True)
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -150,6 +153,22 @@ class ScoutAgent:
             return None
 
     @staticmethod
+    def is_affordable(price: float, portfolio_value_inr: float | None = None) -> bool:
+        """Can 1 share of `price` even clear the 3% max-risk-per-trade gate at
+        its stop distance? If not, the stock is mathematically un-tradeable at
+        current capital — correct behavior is to skip it silently, not to log
+        a startup warning demanding more capital (that was noise: MRF-style
+        stocks are always going to be unaffordable at a retail paper account,
+        so the fix is exclusion, not escalation)."""
+        if price <= 0:
+            return True
+        portfolio_value_inr = (portfolio_value_inr if portfolio_value_inr is not None
+                                else settings.paper_capital_inr)
+        risk_inr = price * (LIMITS.stop_loss_pct / 100)
+        max_risk_inr = portfolio_value_inr * (LIMITS.max_risk_per_trade_pct / 100)
+        return risk_inr <= max_risk_inr
+
+    @staticmethod
     def _passes_liquidity_check(df, tier: str) -> bool:
         """Reject illiquid names — if we can't exit, we're trapped."""
         if df is None or len(df) < 20:
@@ -196,9 +215,13 @@ class ScoutAgent:
                 return None
             score_penalty = -3
 
+        price = float(df["Close"].iloc[-1])
+        if not self.is_affordable(price):
+            self._unaffordable.append(symbol)
+            return None
+
         ind = compute_indicators(df)
         meta = WATCHLIST.get(symbol, {"name": symbol, "sector": "Unknown"})
-        price = float(df["Close"].iloc[-1])
         year_high = float(df["High"].max())
         year_low = float(df["Low"].min())
         vr = ind["volume_ratio"]
@@ -399,11 +422,19 @@ class ScoutAgent:
 
         symbols = [s for s in WATCHLIST if not sectors or WATCHLIST[s]["sector"] in sectors]
 
+        self._unaffordable = []
         scored: list[dict] = []
         for symbol in symbols:
             candidate = self._score_symbol(symbol, nifty_1m, nifty_20d, fii_dii, params, nifty_30d)
             if candidate is not None:
                 scored.append(candidate)
+
+        if self._unaffordable:
+            examples = ", ".join(self._unaffordable[:5])
+            console.print(
+                f"[dim][SCOUT] {len(self._unaffordable)} symbols unaffordable at current "
+                f"capital ({examples}{'...' if len(self._unaffordable) > 5 else ''}) — excluded[/dim]"
+            )
 
         scored.sort(key=lambda c: c["score"], reverse=True)
 

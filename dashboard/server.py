@@ -316,7 +316,14 @@ def collect_dashboard_data() -> dict:
                 forced_history = _json.loads(forced_file.read_text())
             forced_total = len(forced_history)
             forced_wins = sum(1 for t in forced_history if t.get("outcome") == "WIN")
-            kb_count = len(knowledge)
+            # "Patterns Learned" previously counted len(knowledge) — knowledge
+            # is confidence-filtered (>=0.3) AND sliced to 8 for the card list
+            # below, so the tile read as low as 8 even with 65 real KB
+            # entries. Use the same unfiltered count /report uses, plus a
+            # high-confidence breakdown as a second number.
+            kb_all = journal.get_active_knowledge(min_confidence=0.0)
+            kb_count = len(kb_all)
+            kb_high_confidence = sum(1 for e in kb_all if e.confidence >= 0.6)
             try:
                 from src.learning.historical_replay import HistoricalReplayEngine
 
@@ -328,12 +335,28 @@ def collect_dashboard_data() -> dict:
                 "forced_wins": forced_wins,
                 "forced_wr": round(forced_wins / forced_total * 100, 1) if forced_total else 0,
                 "kb_patterns": kb_count,
+                "kb_patterns_high_confidence": kb_high_confidence,
                 "replay_patterns": replay_kb,
             }
         except Exception:
             learning_metrics = {"forced_total": 0, "forced_wins": 0, "forced_wr": 0,
-                                "kb_patterns": 0, "replay_patterns": 0}
+                                "kb_patterns": 0, "kb_patterns_high_confidence": 0,
+                                "replay_patterns": 0}
         learning_metrics["xgboost_progress"] = xgb_status.get("progress_pct", 0)
+
+        try:
+            from src.analytics.loss_categorizer import breakdown as _loss_breakdown
+
+            loss_trades = [(t, t.get("entry_snapshot")) for t in forced_history
+                           if t.get("outcome") == "LOSS"]
+            cont_sim_file = Path("data/cache/continuous_sim_history.json")
+            if cont_sim_file.exists():
+                cont_sim_history = _json.loads(cont_sim_file.read_text())
+                loss_trades.extend((t, t.get("entry_snapshot")) for t in cont_sim_history
+                                   if t.get("outcome") == "LOSS")
+            loss_reason_breakdown = _loss_breakdown(loss_trades)
+        except Exception:
+            loss_reason_breakdown = {}
 
         _KB_ICONS = {"HISTORICAL_REPLAY": "📡", "FORCED_LEARNING": "⚡",
                      "INTRADAY_SIMULATION": "🔬", "SHORT_SIMULATION": "⏱️"}
@@ -365,6 +388,14 @@ def collect_dashboard_data() -> dict:
             from src.data.realtime_feeds import EconomicCalendar, FIIDIIFeed
 
             fii_dii = FIIDIIFeed().get_latest()
+            # A dict missing either the flow value or its date is not a real
+            # payload — still renders as a false "+0Cr" if passed through
+            # as-is (prior audit finding fixed the exception path but not
+            # this one: a *successful* call that returns a stale/placeholder
+            # dict looked identical to a genuine zero-flow day). Require both
+            # fields present before trusting it.
+            if not fii_dii or fii_dii.get("fii_net_crore") is None or not fii_dii.get("as_of"):
+                fii_dii = {"unavailable": True}
             upcoming_events = EconomicCalendar().get_upcoming(14)
         except Exception:
             # {"unavailable": True} (not bare {}) — a bare {} renders as a
@@ -454,6 +485,7 @@ def collect_dashboard_data() -> dict:
             "intraday_sim": intraday_sim,
             "forced_trades": forced_summary,
             "learning_metrics": learning_metrics,
+            "loss_reason_breakdown": loss_reason_breakdown,
             "adaptive_thresholds": adaptive_data,
             "combined_totals": combined_totals,
             "combined_totals_all_time": combined_totals_all_time,

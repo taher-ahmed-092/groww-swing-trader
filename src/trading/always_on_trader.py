@@ -353,12 +353,18 @@ class AlwaysOnTrader:
             stop, target, meets_min_move = self._stop_target_for_costs(entry, atr, tier)
             if not meets_min_move:
                 return None
+            from src.memory.journal import build_entry_snapshot
+
+            entry_snapshot = build_entry_snapshot(
+                {}, {"score": signal_score, "reasoning": rationale}, {}, {},
+                indicators=indicators, extra_context={"regime": self._current_regime()})
             return {
                 "symbol": symbol, "entry": entry, "stop": stop, "target": target,
                 "exit": None, "pnl_pct": None, "outcome": "OPEN",
                 "signal_score": round(signal_score, 3),
                 "opened_at": datetime.now(IST).isoformat(), "closed_at": None,
                 "trade_type": trade_type, "rationale": rationale,
+                "entry_snapshot": entry_snapshot,
                 "is_forced": True, "market_was_closed": False,
                 "tier": ALL_STOCKS.get(symbol, {}).get("tier", "large"),
             }

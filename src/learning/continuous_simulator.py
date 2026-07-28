@@ -249,6 +249,12 @@ class ContinuousSimulator:
 
         pattern_added = self._update_knowledge_safely(symbol, tier, indicators, signal, outcome, regime)
 
+        from src.memory.journal import build_entry_snapshot
+
+        entry_snapshot = build_entry_snapshot(
+            {}, {"score": signal["score"], "reasoning": signal.get("action", "")}, {}, {},
+            indicators=indicators, extra_context={"regime": market_regime})
+
         return {
             "symbol": symbol,
             "tier": tier,
@@ -262,6 +268,7 @@ class ContinuousSimulator:
             "days_held": days,
             "regime": regime,
             "market_regime": market_regime,
+            "entry_snapshot": entry_snapshot,
             "signal_score": signal["score"],
             "rsi": indicators.get("rsi_14", 50),
             "trend": indicators.get("trend", "SIDEWAYS"),

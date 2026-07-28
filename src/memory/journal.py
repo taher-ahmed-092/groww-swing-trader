@@ -25,6 +25,57 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Indicator field names as produced by src.agents.technical.indicators.compute_indicators
+# (see ScoutAgent/HistoricalReplayEngine usage of the same dict). Shared across every
+# entry-snapshot builder (real journal trades, forced/cont-sim/short simulations) so a
+# post-mortem never has to guess which fields were even captured.
+ENTRY_SNAPSHOT_INDICATOR_KEYS = (
+    "rsi_14", "adx_14", "adx_signal", "macd", "obv_trend", "supertrend_direction",
+    "cmf_20", "ichimoku", "vwap_position", "atr_14", "ma_50", "ma_200",
+    "candle_pattern", "week52_position",
+)
+
+
+def build_entry_snapshot(state: dict, tech: dict, judge: dict, fundamental: dict,
+                          indicators: dict | None = None, scout_score: float | None = None,
+                          extra_context: dict | None = None) -> dict:
+    """Builds the nested "entry_snapshot" dict every trade record (real
+    journal, forced, continuous-sim, short) should carry: indicators,
+    market_context, scores, and an entry_reason string. Defensive throughout
+    — a missing field is simply omitted, never an exception, since callers
+    range from a fully-populated LangGraph TradeState to a bare simulation dict.
+    `indicators` overrides any indicator fields found on `tech` (forced/cont-sim
+    callers already have a raw compute_indicators() dict; real pipeline trades
+    carry indicators nested inside technical_verdict instead)."""
+    tech = tech or {}
+    judge = judge or {}
+    fundamental = fundamental or {}
+    ind_source = {**tech, **(tech.get("indicators") or {}), **(indicators or {})}
+    ind = {k: ind_source.get(k) for k in ENTRY_SNAPSHOT_INDICATOR_KEYS}
+
+    ctx = dict(state.get("market_context", {}) or {}) if isinstance(state, dict) else {}
+    ctx.update(extra_context or {})
+    market_context = {
+        "regime": ctx.get("regime"),
+        "nifty_price": ctx.get("nifty_price"),
+        "nifty_rsi": ctx.get("rsi", ctx.get("nifty_rsi")),
+        "fii_signal": ctx.get("fii_signal", ctx.get("fii_trend")),
+    }
+
+    scores = {
+        "scout": scout_score,
+        "fundamental": fundamental.get("score"),
+        "technical": tech.get("score"),
+        "judge": judge.get("overall_score", judge.get("score")),
+    }
+
+    entry_reason = (tech.get("reasoning") or tech.get("rationale")
+                    or judge.get("one_line_verdict") or "")
+
+    return {"indicators": ind, "market_context": market_context,
+            "scores": scores, "entry_reason": entry_reason}
+
+
 class TradeRecord(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     symbol: str
@@ -187,15 +238,17 @@ class TradingJournal:
     def log_proposed(self, state: TradeState) -> TradeRecord:
         tech = state.get("technical_verdict", {})
         judge = state.get("judge_verdict", {})
+        fundamental = state.get("fundamental_verdict", {})
         # Compact, self-contained snapshot of the entry thesis for later RCA.
         snapshot = {
-            "fundamental_verdict": state.get("fundamental_verdict", {}),
+            "fundamental_verdict": fundamental,
             "technical_verdict": tech,
             "judge_verdict": judge,
             "market_context": state.get("market_context", {}),
             "sentiment": state.get("sentiment", {}),
             "sector": state.get("sector", ""),
             "manually_requested": bool(state.get("manually_requested")),
+            "entry_snapshot": build_entry_snapshot(state, tech, judge, fundamental),
         }
         record = TradeRecord(
             symbol=state.get("symbol", "UNKNOWN"),

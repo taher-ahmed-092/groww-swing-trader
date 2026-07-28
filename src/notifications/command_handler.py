@@ -510,11 +510,29 @@ class CommandHandler:
         except Exception:
             best_text = worst_text = "n/a"
 
+        try:
+            from src.ml.calibration import CalibratedEnsemble
+
+            ensemble_status = CalibratedEnsemble.get_status()
+            brier_text = ", ".join(f"{k}={v}" for k, v in ensemble_status["brier_scores"].items()) or "not trained yet"
+        except Exception:
+            brier_text = "unavailable"
+
+        try:
+            regime_stats = HistoricalReplayEngine().get_regime_replay_stats()
+            regime_lines = "\n".join(
+                f"  {'✅' if v['complete'] else '⏳'} {r}: {v['records']}/{v['target']}"
+                for r, v in regime_stats.items())
+        except Exception:
+            regime_lines = "  Unavailable"
+
         self._send(
             "📚 *Learning Status*\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"Patterns: {len(kb)} total | Replay: {stats['total_stocks_replayed']}/{len(ALL_STOCKS)} stocks\n\n"
             f"*Top Patterns:*\n{top_text}\n\n"
+            f"*Regime-Stratified Replay:*\n{regime_lines}\n\n"
+            f"*Calibrated Ensemble Brier Scores:* {brier_text}\n\n"
             f"*Adaptive Thresholds:*\n" + "\n".join(thresh_lines) + "\n\n"
             f"*Signal accuracy:*\n{signals}\n\n"
             f"*Best-performing stocks:* {best_text}\n"
@@ -803,6 +821,18 @@ class CommandHandler:
         forced_total_all = len(forced_all)
         forced_wr_all = round(forced_wins_all / forced_total_all * 100, 1) if forced_total_all else 0
 
+        try:
+            from src.analytics.loss_categorizer import breakdown as _loss_breakdown
+
+            loss_trades = [(t, t.get("entry_snapshot")) for t in forced_all
+                           if t.get("outcome") == "LOSS"]
+            loss_breakdown = {k: v for k, v in _loss_breakdown(loss_trades).items() if v > 0}
+            loss_text = ("\n".join(f"  {k}: {v}" for k in sorted(loss_breakdown, key=loss_breakdown.get, reverse=True)
+                                   for v in [loss_breakdown[k]])
+                        if loss_breakdown else "  No categorized losses yet.")
+        except Exception:
+            loss_text = "  Unavailable"
+
         sim_file = Path("data/cache/intraday_sim_history.json")
         sim_all = []
         if sim_file.exists():
@@ -833,7 +863,8 @@ class CommandHandler:
             pf_str = "∞" if pf >= 999 else f"{pf:.2f}"
             dd_label = pro.get("max_drawdown_label", "Max Drawdown")
             pro_text = (
-                f"Profit Factor: {pf_str} | {dd_label}: {pro.get('max_drawdown_pct', 0):.1f}% "
+                f"Profit Factor (real, post-fix era): {pf_str} | "
+                f"{dd_label}: {pro.get('max_drawdown_pct', 0):.1f}% "
                 f"({pro.get('n_trades', 0)}t post-fix)\n"
                 f"Trend: {trend_icon} {pro.get('trend', 'STABLE')} "
                 f"(rolling WR {pro.get('rolling_wr_recent20', 0)}% vs prior {pro.get('rolling_wr_prev20', 0)}%)")
@@ -941,6 +972,9 @@ class CommandHandler:
             "*🔬 Intraday Simulations*\n"
             f"{sim_wins}W / {sim_total - sim_wins}L from {sim_total} sims\n"
             f"Win rate: {sim_wr:.0f}%\n\n"
+
+            "*🩺 Loss Reason Breakdown (forced trades, all-time)*\n"
+            f"{loss_text}\n\n"
 
             "*🧠 Knowledge Base*\n"
             f"{len(kb)} patterns learned\n"

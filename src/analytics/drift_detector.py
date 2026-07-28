@@ -29,7 +29,8 @@ DRIFT_HISTORY_FILE = Path("data/cache/drift_history.json")
 # A drop computed from too few trades (or a "71% loss rate" that's really
 # 5-of-7) is noise dressed up as a finding — these floors gate every drift
 # check on genuinely sufficient evidence before declaring drift.
-MIN_TRADES_PER_WINDOW = 20   # each of the two 30-trade windows needs this many
+WR_DRIFT_WINDOW = 100        # each WR-drift comparison window, in trades
+MIN_TRADES_PER_WINDOW = 20   # each window needs at least this many (floor, < WR_DRIFT_WINDOW)
 MIN_RECENT_MATCHES = 10      # pattern-drift sample floor (was 3 — too small)
 MIN_REGIME_TAGGED_RECORDS = 20  # regime-drift sample floor, post market_regime filter
 
@@ -131,13 +132,15 @@ class DriftDetector:
 
     # ── checks ───────────────────────────────────────────────────────────────
     def _check_wr_drift(self) -> dict:
-        """Rolling 30-vs-30 win rate comparison across all simulation sources."""
+        """Rolling 100-vs-100 win rate comparison across all simulation sources.
+        Widened from 30-vs-30 (audit finding: a 30-trade window swung 47pp on
+        ordinary variance, firing drift alerts on noise, not a real edge shift)."""
         all_trades = self._load_all_sims()
-        if len(all_trades) < 60:
+        if len(all_trades) < 2 * WR_DRIFT_WINDOW:
             return {"detected": False, "reason": "insufficient data"}
 
-        recent = all_trades[-30:]
-        previous = all_trades[-60:-30]
+        recent = all_trades[-WR_DRIFT_WINDOW:]
+        previous = all_trades[-2 * WR_DRIFT_WINDOW:-WR_DRIFT_WINDOW]
 
         if len(recent) < MIN_TRADES_PER_WINDOW:
             return {"detected": False,

@@ -5,31 +5,37 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.analytics.drift_detector import DriftDetector
+from src.analytics.drift_detector import WR_DRIFT_WINDOW, DriftDetector
 from src.memory.journal import KnowledgeEntry
 
 
 def _write_sims(n_win_first_half, n_win_second_half, regime="VOLATILE",
                  market_regime=None, tag_market_regime=True):
-    """30 sims in each half; win/loss ratio per half controlled by caller.
+    """WR_DRIFT_WINDOW sims in each half; win/loss ratio per half controlled
+    by caller. Win counts are expressed out of 30 (historical test-authoring
+    convention) and scaled to the current window size (100 post Fix 4 — a
+    30-trade window swung 47pp on ordinary variance).
 
     `market_regime` defaults to `regime` (both fields describing the same
     market-wide category in these tests). Pass `tag_market_regime=False` to
     simulate legacy records that predate the `market_regime` field."""
     if market_regime is None:
         market_regime = regime
+    n = WR_DRIFT_WINDOW
+    wins_first = round(n_win_first_half / 30 * n)
+    wins_second = round(n_win_second_half / 30 * n)
     trades = []
-    for i in range(30):
-        outcome = "WIN" if i < n_win_first_half else "LOSS"
+    for i in range(n):
+        outcome = "WIN" if i < wins_first else "LOSS"
         row = {"outcome": outcome, "regime": regime, "rsi": 52,
-               "simulated_at": f"2026-01-{i + 1:02d}T00:00:00"}
+               "simulated_at": f"2026-01-{i + 1:03d}T00:00:00"}
         if tag_market_regime:
             row["market_regime"] = market_regime
         trades.append(row)
-    for i in range(30):
-        outcome = "WIN" if i < n_win_second_half else "LOSS"
+    for i in range(n):
+        outcome = "WIN" if i < wins_second else "LOSS"
         row = {"outcome": outcome, "regime": regime, "rsi": 52,
-               "simulated_at": f"2026-02-{i + 1:02d}T00:00:00"}
+               "simulated_at": f"2026-02-{i + 1:03d}T00:00:00"}
         if tag_market_regime:
             row["market_regime"] = market_regime
         trades.append(row)
