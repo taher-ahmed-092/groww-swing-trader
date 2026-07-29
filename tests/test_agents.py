@@ -50,7 +50,14 @@ def test_no_choppy_veto_in_balanced_mode(monkeypatch):
     assert "CHOPPY_MARKET" not in verdict["flags"]
 
 
-def test_auto_veto_fighting_nifty():
+def test_auto_veto_fighting_nifty(monkeypatch):
+    # FIGHTING_NIFTY only auto-vetoes in modes that don't trade downtrends
+    # (balanced/conserve) — rogue intentionally trades them (src/trading/
+    # modes.py trades_downtrends), so this must pin the mode explicitly
+    # rather than rely on whatever the ambient default/override happens to be.
+    from src.trading.modes import MODES
+
+    monkeypatch.setattr("src.judge.evaluator.get_current_mode", lambda: MODES["balanced"])
     state = _base_state()
     state["market_context"]["nifty_trend"] = "DOWNTREND"
     state["technical_verdict"]["signal"] = "BUY"

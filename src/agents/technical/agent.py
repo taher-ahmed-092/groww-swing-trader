@@ -40,7 +40,7 @@ class TechnicalAgent:
         self.market = MarketContext()
         self.lessons = LessonsRetriever()
 
-    def _levels(self, entry_price: float, indicators: dict) -> tuple[float, float]:
+    def _levels(self, entry_price: float, indicators: dict, tier: str = "large") -> tuple[float, float, list[str]]:
         # Prefer the ATR-based stop; fall back to the % stop if ATR is unavailable
         # or produces a nonsensical (non-positive / above-entry) level.
         atr_stop = indicators.get("atr_stop")
@@ -48,8 +48,42 @@ class TechnicalAgent:
             stop_price = round(float(atr_stop), 4)
         else:
             stop_price = round(entry_price * (1 - LIMITS.stop_loss_pct / 100), 4)
-        target_price = round(entry_price + (entry_price - stop_price) * LIMITS.target_reward_ratio, 4)
-        return stop_price, target_price
+
+        # Cost-aware target floor (Fix — was previously a FIXED reward ratio
+        # (LIMITS.target_reward_ratio) applied to the ATR stop distance,
+        # neither resistance-based nor cost-aware: a tight ATR stop times a
+        # flat 2:1 ratio can produce a target whose net move barely clears
+        # round-trip costs (same failure mode already fixed in
+        # always_on_trader._stop_target_for_costs — mirrored here). ratio
+        # is the higher of the configured floor and 8x the round-trip cost
+        # as a fraction of the stop distance, so the target always clears
+        # costs with margin regardless of how tight the ATR stop is.
+        target_flags: list[str] = []
+        stop_distance_pct = (entry_price - stop_price) / entry_price * 100 if entry_price else 0.0
+        ratio = LIMITS.target_reward_ratio
+        if stop_distance_pct > 0:
+            try:
+                from src.trading.cost_model import compute_round_trip_costs
+
+                round_trip_cost_pct = compute_round_trip_costs(
+                    entry_price, entry_price * 1.06, 1, tier).total_pct
+                ratio = max(LIMITS.target_reward_ratio, 8 * round_trip_cost_pct / stop_distance_pct)
+            except Exception:
+                pass
+        cost_aware_target = round(entry_price + (entry_price - stop_price) * ratio, 4)
+
+        # If realistic resistance (nearest pivot R1) sits below the cost-aware
+        # target, don't force the target past it — flag it and let the target
+        # sit at the more realistic level; the risk checker's net R:R gate
+        # rejects it normally if that's now too tight to clear costs, rather
+        # than this function fabricating an unreachable target.
+        resistance = indicators.get("r1")
+        target_price = cost_aware_target
+        if resistance is not None and 0 < resistance < cost_aware_target:
+            target_price = round(float(resistance), 4)
+            target_flags.append("TARGET_CAPPED_BY_RESISTANCE")
+
+        return stop_price, target_price, target_flags
 
     _weekly_trend_cache: dict[tuple[str, str], str] = {}
 
@@ -92,8 +126,11 @@ class TechnicalAgent:
                 "reasoning": "No price data available.",
             }
 
+        from src.data.watchlist import ALL_STOCKS
+
+        tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
         entry_price = round(float(df["Close"].iloc[-1]), 4)
-        stop_price, target_price = self._levels(entry_price, indicators)
+        stop_price, target_price, target_flags = self._levels(entry_price, indicators, tier)
         weekly_trend = self._weekly_trend(symbol)
         market_context = state.get("market_context") or self.market.get_nifty_context()
         entry_recommendation = recommend_entry(indicators, entry_price)
@@ -111,7 +148,7 @@ class TechnicalAgent:
             stop_price = strat_signal["stop_price"]
             target_price = strat_signal["target_price"]
 
-        flags: list[str] = []
+        flags: list[str] = list(target_flags)
         if indicators.get("adx_signal") == "CHOPPY":
             flags.append("CHOPPY_MARKET")
 

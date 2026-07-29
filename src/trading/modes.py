@@ -30,6 +30,12 @@ class TradingModeConfig:
     position_size_multiplier: float  # applied on top of Kelly + tier sizing
     trades_downtrends: bool          # if True, judge won't auto-veto longs in a downtrend
     require_adx_trending: bool       # if True, judge auto-vetoes CHOPPY_MARKET (choppy ADX)
+    # If True, judge skips SUPERTREND_BEARISH / SELLING_PRESSURE / BELOW_ALL_SUPPORTS —
+    # rogue's eagerness extends to these technical auto-vetoes too, not just the
+    # trend/chop ones above. POOR_RISK_REWARD is NEVER gated by this — it protects
+    # capital regardless of mode eagerness (CLAUDE.md rule 2: every trade needs a
+    # sane stop/target relationship, independent of how eager the mode is to trade).
+    skip_technical_vetoes: bool
     description: str
 
 
@@ -37,14 +43,17 @@ MODES: dict[str, TradingModeConfig] = {
     "conserve": TradingModeConfig(
         name="conserve", emoji="🛡️", judge_threshold=8.0, max_trades_per_week=2,
         position_size_multiplier=0.5, trades_downtrends=False, require_adx_trending=True,
+        skip_technical_vetoes=False,
         description="Capital protection. High bar, fewer trades, half position size."),
     "balanced": TradingModeConfig(
         name="balanced", emoji="⚖️", judge_threshold=6.5, max_trades_per_week=3,
         position_size_multiplier=1.0, trades_downtrends=False, require_adx_trending=False,
+        skip_technical_vetoes=False,
         description="Default. Moderate bar, full Kelly size."),
     "rogue": TradingModeConfig(
         name="rogue", emoji="⚡", judge_threshold=5.5, max_trades_per_week=5,
         position_size_multiplier=1.0, trades_downtrends=True, require_adx_trending=False,
+        skip_technical_vetoes=True,
         description="Eager learning. Low bar, more trades, will trade downtrends."),
 }
 

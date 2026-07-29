@@ -369,6 +369,15 @@ def market_open_pairs_job() -> None:
     app = build_graph()
     state = get_initial_state(best["buy_symbol"])
     state["sector"] = best["sector"]
+    # Root cause of pairs judge scores reading 0.0: technical_node unconditionally
+    # re-runs TechnicalAgent().analyze(state) and overwrites the pre-built
+    # technical_verdict below — StrategyRegistry only re-fires the pairs strategy
+    # (preserving strategy_name="pairs_trading") if state["pairs_opportunity"] is
+    # present; without it, TechnicalAgent falls through to ordinary momentum
+    # analysis on the buy leg's own indicators, evaluate() then skips the pairs
+    # scoring branch entirely, and the buy leg's own momentum auto-vetoes
+    # (FIGHTING_NIFTY, CHOPPY_MARKET, etc.) can zero the judge score.
+    state["pairs_opportunity"] = best
     state["candidates"] = [{
         "symbol": best["buy_symbol"],
         "name": best["buy_symbol"],
@@ -417,7 +426,7 @@ def market_open_pairs_job() -> None:
     else:
         risk_reasons = result.get("risk_check", {}).get("reasons", [])
         if not verdict.get("approved"):
-            blocker = f"judge {verdict.get('overall_score', 0):.1f}<5.5"
+            blocker = _judge_rejection_detail(verdict)
         else:
             blocker = "; ".join(risk_reasons) or "judge not approved"
         console.print(
@@ -427,6 +436,23 @@ def market_open_pairs_job() -> None:
 
 def _rejection_detail(symbol: str, gate: str, detail: str) -> dict:
     return {"symbol": symbol, "gate": gate, "detail": detail}
+
+
+def _judge_rejection_detail(judge: dict) -> str:
+    """Reads the SAME live judge verdict just computed this run — never a
+    fabricated 'score<threshold' string. When the actual cause is an
+    auto-veto flag (HARD_REJECTED_FUNDAMENTAL, FIGHTING_NIFTY, CHOPPY_MARKET,
+    etc. — judge.evaluate() returns these as `flags` with overall_score
+    forced to 0.0 BEFORE any scorecard math runs), that flag name is the real
+    diagnostic; a numeric score comparison there is meaningless (0.0 vs
+    threshold tells you nothing about WHY). Only falls back to the numeric
+    comparison when no flag fired — a genuine low LLM/rule-based score."""
+    flags = judge.get("flags") or []
+    if flags:
+        return ", ".join(flags)
+    from src.trading.modes import get_current_mode
+
+    return f"judge {judge.get('overall_score', 0):.1f}<{get_current_mode().judge_threshold}"
 
 
 def _log_top_rejections(job_label: str, total: int, rejections: list[dict]) -> None:
@@ -488,11 +514,7 @@ def market_open_scan_job() -> None:
         judge = LLMJudge().evaluate(state)
         state["judge_verdict"] = judge
         if not judge.get("approved"):
-            from src.trading.modes import get_current_mode
-
-            rejections.append(_rejection_detail(
-                symbol, "JUDGE",
-                f"judge {judge.get('overall_score', 0):.1f}<{get_current_mode().judge_threshold}"))
+            rejections.append(_rejection_detail(symbol, "JUDGE", _judge_rejection_detail(judge)))
             continue
 
         risk = RiskChecker().check(state)

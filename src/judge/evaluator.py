@@ -73,14 +73,18 @@ class LLMJudge:
             if weekly_trend == "DOWNTREND" and signal == "BUY":
                 flags.append("WEEKLY_TREND_CONFLICT")
 
-        # Phase 4 — supertrend / money-flow / support auto-vetoes.
-        cmf = indicators.get("cmf_20")
-        if indicators.get("supertrend_direction") == "BEARISH" and signal == "BUY":
-            flags.append("SUPERTREND_BEARISH")
-        if cmf is not None and cmf < -0.15 and signal == "BUY":
-            flags.append("SELLING_PRESSURE")
-        if indicators.get("price_vs_vwap") == "BELOW" and indicators.get("nearest_pivot_level") == "BELOW_S1":
-            flags.append("BELOW_ALL_SUPPORTS")
+        # Phase 4 — supertrend / money-flow / support auto-vetoes. Rogue mode
+        # (skip_technical_vetoes) skips all three — its eagerness to learn
+        # extends beyond just trend/chop. POOR_RISK_REWARD above is never
+        # gated by mode: it protects capital regardless of eagerness.
+        if not mode.skip_technical_vetoes:
+            cmf = indicators.get("cmf_20")
+            if indicators.get("supertrend_direction") == "BEARISH" and signal == "BUY":
+                flags.append("SUPERTREND_BEARISH")
+            if cmf is not None and cmf < -0.15 and signal == "BUY":
+                flags.append("SELLING_PRESSURE")
+            if indicators.get("price_vs_vwap") == "BELOW" and indicators.get("nearest_pivot_level") == "BELOW_S1":
+                flags.append("BELOW_ALL_SUPPORTS")
         return flags
 
     @staticmethod
@@ -137,9 +141,17 @@ class LLMJudge:
         if correlation is None:
             correlation = 0.75  # PairsTradingStrategy's own minimum is 0.70
 
-        z_score_score = min(10, (z_score - 2.0) * 4 + 5)
-        corr_score = correlation * 10
-        overall_score = round((z_score_score + corr_score) / 2, 2)
+        try:
+            z_score = float(z_score)
+            correlation = float(correlation)
+            z_score_score = min(10, (z_score - 2.0) * 4 + 5)
+            corr_score = correlation * 10
+            overall_score = round((z_score_score + corr_score) / 2, 2)
+        except Exception as exc:
+            console.print(f"[red][JUDGE] Pairs scoring math failed (z={z_score!r}, "
+                          f"corr={correlation!r}): {exc}[/red]")
+            z_score, correlation = 0.0, 0.0
+            z_score_score = corr_score = overall_score = 0.0
 
         buy_symbol = opp.get("buy_symbol") or state.get("symbol", "?")
         pair_symbol = opp.get("pair_symbol") or "?"

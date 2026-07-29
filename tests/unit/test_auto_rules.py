@@ -20,6 +20,10 @@ def _extractor_with_kb(kb, tmp_path, monkeypatch):
     ex.journal = None
     monkeypatch.setattr(
         "src.memory.journal.TradingJournal.get_active_knowledge", lambda self, **k: kb)
+    # Isolate from real data/dossiers/ — dossier-driven vetoes/boosts are
+    # covered separately in test_dossier_auto_rules.py; these KB-only tests
+    # must not be sensitive to whatever dossiers happen to exist on disk.
+    monkeypatch.setattr("src.memory.company_dossier.dossier_store.search", lambda **k: [])
     return ex
 
 
