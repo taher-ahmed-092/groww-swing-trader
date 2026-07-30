@@ -250,6 +250,21 @@ class AlwaysOnTrader:
                 if not self._passes_entry_filter(ind, regime):
                     continue
                 score = self._quick_score(ind)
+                if regime == "VOLATILE":
+                    # Diagnostic (Fix 4): this path never reads AdaptiveThresholds'
+                    # judge_threshold — only its win_rate (via _passes_entry_filter)
+                    # — so the real pipeline's raised VOLATILE bar does not gate
+                    # forced entries at all. Log every one so that's auditable.
+                    try:
+                        from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+                        judge_threshold = AdaptiveThresholds().get_judge_threshold(regime)
+                    except Exception:
+                        judge_threshold = None
+                    log.info(
+                        "[ENTRY] VOLATILE regime, threshold %s (forced path — "
+                        "not consulted here), candidate scored %s",
+                        judge_threshold, score)
                 tier = ALL_STOCKS.get(symbol, {}).get("tier", "large")
                 results.append({
                     "symbol": symbol, "entry": entry, "indicators": ind,

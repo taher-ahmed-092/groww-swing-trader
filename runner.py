@@ -49,6 +49,25 @@ from src.risk.checker import RiskChecker
 console = Console()
 log = logging.getLogger(__name__)
 
+
+class _MisfireLogFilter(logging.Filter):
+    """A job "missed by 4h22m" under misfire_grace_time=900s is expected
+    (laptop asleep/busy — not a bug); APScheduler still logs it as a bare
+    WARNING with no context, which reads as an error. The custom catch-up
+    "catch-up: ran X (missed by Yh)" messages (see _CATCHUP_JOBS below)
+    already communicate this better, so demote APScheduler's own line to
+    DEBUG rather than dropping it entirely (still visible with debug logging
+    enabled, just not at WARNING where it looks like a real failure)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if "was missed by" in record.getMessage():
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
+
+
+logging.getLogger("apscheduler.executors").addFilter(_MisfireLogFilter())
+
 _CANDIDATES_FILE = os.path.join("data", "cache", "weekly_candidates.json")
 _DISTILL_MARKER = os.path.join("data", "cache", "last_distill.txt")
 TZ = "Asia/Kolkata"
@@ -663,6 +682,25 @@ def daily_learning_job() -> None:
     if rules["total_rules"] > 0:
         veto_count = len(rules["stock_vetoes"])
         boost_count = len(rules["stock_boosts"])
+        # Every dynamic string below (stock symbol, veto/boost reason, pattern
+        # description) MUST be escape_markdown()'d — these come straight from
+        # KB pattern_description text and dossier win-rate summaries, which
+        # routinely carry Telegram legacy-Markdown special chars (_, *, `, [)
+        # that otherwise break the parser mid-message (byte-offset parse error
+        # on the rendered text, silently dropping the whole notification).
+        veto_lines = [
+            f"  • {escape_markdown(sym)}: {escape_markdown(str(v.get('reason', '')))[:70]}"
+            for sym, v in list(rules["stock_vetoes"].items())[:3]
+        ]
+        boost_lines = [
+            f"  • {escape_markdown(sym)}: {escape_markdown(str(v.get('reason', '')))[:70]}"
+            for sym, v in list(rules["stock_boosts"].items())[:3]
+        ]
+        examples = ""
+        if veto_lines:
+            examples += "\nAvoid:\n" + "\n".join(veto_lines)
+        if boost_lines:
+            examples += "\nPrefer:\n" + "\n".join(boost_lines)
         TelegramNotifier().send_message(
             "🤖 *Auto-rules updated from learning*\n"
             f"Stocks to avoid: {veto_count}\n"
@@ -670,6 +708,7 @@ def daily_learning_job() -> None:
             f"Setup patterns: {len(rules['setup_vetoes'])} vetoes, "
             f"{len(rules['setup_boosts'])} boosts\n"
             f"Total active rules: {rules['total_rules']}"
+            f"{examples}"
         )
 
     from src.ml.stock_priors import StockPriors

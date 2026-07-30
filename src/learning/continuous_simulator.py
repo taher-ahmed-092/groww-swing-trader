@@ -236,6 +236,24 @@ class ContinuousSimulator:
         if signal["action"] == "SKIP":
             return None
 
+        if market_regime == "VOLATILE":
+            # Diagnostic (Fix 4): _evaluate_signal's threshold is a FIXED
+            # per-tier cutoff ({"large": 0.30, ...}), never AdaptiveThresholds'
+            # regime-adaptive judge_threshold — so the real pipeline's raised
+            # VOLATILE bar (currently 7.5) has no effect on continuous-sim
+            # entries, which dominate total trade volume. Log every one so
+            # that's auditable rather than only inferred from the aggregate stat.
+            try:
+                from src.memory.adaptive_thresholds import AdaptiveThresholds
+
+                judge_threshold = AdaptiveThresholds().get_judge_threshold(market_regime)
+            except Exception:
+                judge_threshold = None
+            log.info(
+                "[ENTRY] VOLATILE regime, threshold %s (cont_sim path — "
+                "not consulted here), candidate scored %s",
+                judge_threshold, signal["score"])
+
         atr = indicators.get("atr_14") or (entry * 0.02)
         stop = round(max(entry * 0.92, entry - 2 * atr), 2)
         target = round(entry + 3 * (entry - stop), 2)  # 3:1 R:R

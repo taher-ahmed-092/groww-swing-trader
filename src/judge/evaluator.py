@@ -264,6 +264,7 @@ class LLMJudge:
                 flags.append("RF_CONFIRMED_RSI_PENALTY")
             if manually_requested:
                 flags.append("MANUALLY_REQUESTED")
+            self._log_volatile_entry(regime, threshold, overall)
             return {
                 "approved": overall >= threshold,
                 "score": round(overall / 10, 4),
@@ -403,4 +404,16 @@ class LLMJudge:
         verdict["overall_score"] = round(overall, 4)
         verdict["score"] = round(overall / 10, 4)  # 0-1 for journal/back-compat
         verdict["approved"] = bool(overall >= threshold)
+        self._log_volatile_entry(regime, threshold, overall)
         return verdict
+
+    @staticmethod
+    def _log_volatile_entry(regime: str, threshold: float, score: float) -> None:
+        """Fix 4 diagnostic: VOLATILE is the system's largest AND worst-
+        performing regime bucket. This makes every real-pipeline entry
+        attempt under VOLATILE visible with the actual threshold + score
+        used, so it's auditable whether the adaptive threshold is genuinely
+        gating entries here (as opposed to just being recorded as a stat)."""
+        if regime == "VOLATILE":
+            console.print(
+                f"[ENTRY] VOLATILE regime, threshold {threshold}, candidate scored {score}")

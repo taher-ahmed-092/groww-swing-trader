@@ -24,12 +24,22 @@ class PerformanceAnalyzer:
         visible) — across ALL sources (real + forced + intraday + continuous_sim),
         not just real pipeline trades. Real-only counting is why Strategy
         Performance previously showed 0 trades for 3 of 4 strategies: forced/
-        cont-sim volume (the vast majority of trades) never recorded a strategy tag."""
+        cont-sim volume (the vast majority of trades) never recorded a strategy tag.
+
+        CURRENT-ERA only (matches dashboard.py's `combined_totals` and this
+        class's own get_professional_metrics headline) — bug fix: this
+        previously summed across ALL eras (pre- + post-fix) while the
+        dashboard/telegram scoreboard total is current-era only, so
+        sum(strategy rows) never matched the scoreboard total (e.g. 2615 vs
+        1794). Both surfaces now read the identical
+        load_all_trade_history(journal) + split_by_era current-era slice."""
+        from src.analytics.era import split_by_era
         from src.analytics.strategy_attribution import compute_strategy_stats
         from src.analytics.trade_loader import load_all_trade_history
 
         all_trades = load_all_trade_history(self.journal)
-        stats = compute_strategy_stats(all_trades)
+        current_era, _all_time = split_by_era(all_trades)
+        stats = compute_strategy_stats(current_era)
         return {
             strat: {
                 "win_rate": s["win_rate"], "trades": s["trades"],
