@@ -77,11 +77,29 @@ class TechnicalAgent:
         # sit at the more realistic level; the risk checker's net R:R gate
         # rejects it normally if that's now too tight to clear costs, rather
         # than this function fabricating an unreachable target.
+        #
+        # BUT: R1 = 2*pivot - prior_low sits 0.5-1% above entry for a stock
+        # near its recent high, which is noise relative to a ~7% stop
+        # (gross R:R ~0.1:1) — every candidate hit POOR_RISK_REWARD as a
+        # result. Only trust R1 as a real cap when it's at least
+        # min_resistance_distance_ratio (config) multiples of the stop
+        # distance above entry; otherwise it's too close to be a meaningful
+        # target and the cost-aware target is used instead.
         resistance = indicators.get("r1")
         target_price = cost_aware_target
+        stop_distance = entry_price - stop_price
         if resistance is not None and 0 < resistance < cost_aware_target:
-            target_price = round(float(resistance), 4)
-            target_flags.append("TARGET_CAPPED_BY_RESISTANCE")
+            min_distance = LIMITS.min_resistance_distance_ratio * stop_distance
+            if (resistance - entry_price) >= min_distance:
+                target_price = round(float(resistance), 4)
+                target_flags.append("TARGET_CAPPED_BY_RESISTANCE")
+            else:
+                resistance_pct = (resistance - entry_price) / entry_price * 100 if entry_price else 0.0
+                min_pct = min_distance / entry_price * 100 if entry_price else 0.0
+                console.print(
+                    f"[dim]R1 ₹{resistance:.2f} is {resistance_pct:.2f}% above entry "
+                    f"(< {min_pct:.2f}% minimum), ignoring — using cost-aware target "
+                    f"₹{cost_aware_target:.2f}[/dim]")
 
         return stop_price, target_price, target_flags
 

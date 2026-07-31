@@ -156,19 +156,29 @@ class EngineScorecard:
                         f"PF={pf:.2f}, n_trades={n}, win_rate={stats['win_rate']:.0%}")
                 continue
 
+            # Bug fix: the old `elif n < MIN_TRADES_FOR_THROTTLE: new_mode =
+            # prev_mode` branch meant an engine sitting in "probation" (the
+            # normal case for n < 20) never got its PF evaluated at all
+            # until n reached 50 — PROBATION_MIN_TRADES=20 was documented as
+            # the probation exit point but the code silently required 50.
+            # A PF clear of the pause/throttle/restore thresholds is a
+            # strong-enough signal to act on at 20 trades already; only the
+            # genuinely NEUTRAL band (between throttle and restore) still
+            # waits for the fuller 50-trade sample before snapping to
+            # "normal" on thin evidence.
             if n < PROBATION_MIN_TRADES:
                 new_mode = "probation"
                 reason = (f"current-era evidence still building ({n}/{PROBATION_MIN_TRADES} "
                           "trades) — half-size entries while proving itself")
-            elif n < MIN_TRADES_FOR_THROTTLE:
-                new_mode = "probation" if prev_mode == "paused" else prev_mode
-                reason = f"insufficient evidence ({n}/{MIN_TRADES_FOR_THROTTLE} trades)"
             elif pf < PF_PAUSE_THRESHOLD:
                 new_mode, reason = "paused", f"PF {pf:.2f} < {PF_PAUSE_THRESHOLD} over {n} trades"
             elif pf < PF_THROTTLE_THRESHOLD:
                 new_mode, reason = "throttled", f"PF {pf:.2f} < {PF_THROTTLE_THRESHOLD} over {n} trades"
             elif pf > PF_RESTORE_THRESHOLD:
                 new_mode, reason = "normal", f"PF {pf:.2f} > {PF_RESTORE_THRESHOLD} over {n} trades"
+            elif n < MIN_TRADES_FOR_THROTTLE:
+                new_mode = "probation" if prev_mode in ("probation", "paused") else prev_mode
+                reason = f"neutral PF, still building evidence ({n}/{MIN_TRADES_FOR_THROTTLE} trades)"
             else:
                 new_mode, reason = prev_mode, f"PF {pf:.2f} in neutral band over {n} trades"
 

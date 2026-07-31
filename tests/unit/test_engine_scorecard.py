@@ -58,13 +58,43 @@ def test_scorecard_probation_below_20_current_era_trades(tmp_path, monkeypatch):
     assert changes["LIVE_FORCED"]["new"] == "probation"
 
 
-def test_scorecard_no_change_between_20_and_50_trades(tmp_path, monkeypatch):
+def test_scorecard_neutral_pf_waits_for_50_trades(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # 30 trades — past probation (20) but below MIN_TRADES_FOR_THROTTLE (50):
-    # not enough evidence yet for a pause/throttle/restore decision.
-    _write_forced_history(n_wins=10, n_losses=20, pnl_win=1.0, pnl_loss=-5.0)
+    # 30 trades, PF exactly 1.0 (neutral band, between throttle 0.8 and
+    # restore 1.2) — past probation (20) but below MIN_TRADES_FOR_THROTTLE
+    # (50): genuinely ambiguous evidence, correctly waits rather than
+    # snapping to "normal" on a thin sample.
+    _write_forced_history(n_wins=15, n_losses=15, pnl_win=1.0, pnl_loss=-1.0)
     changes = EngineScorecard().apply_throttles()
     assert "LIVE_FORCED" not in changes
+
+
+def test_scorecard_strong_pf_exits_probation_at_20_trades(tmp_path, monkeypatch):
+    """Bug fix: PROBATION_MIN_TRADES=20 is documented (and relied on by
+    daily_learning_job's messaging) as the point an engine's PF starts
+    getting evaluated — the old code instead silently required 50 trades
+    before a pause/throttle/restore decision could fire, so a genuinely
+    strong (or weak) engine sat in "probation" for 30 extra trades past its
+    documented exit point. A PF clear of PF_RESTORE_THRESHOLD (1.2) at
+    exactly 20 trades must promote to "normal" immediately."""
+    monkeypatch.chdir(tmp_path)
+    THROTTLE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    THROTTLE_FILE.write_text(json.dumps(
+        {"LIVE_FORCED": {"mode": "probation", "pf": None, "updated": "x", "reason": "seed"}}))
+    # 13 wins @ +3.0%, 7 losses @ -2.0%, n=20 -> PF = 39/14 = 2.79 > 1.2.
+    _write_forced_history(n_wins=13, n_losses=7, pnl_win=3.0, pnl_loss=-2.0)
+    changes = EngineScorecard().apply_throttles()
+    assert changes["LIVE_FORCED"]["new"] == "normal"
+
+
+def test_scorecard_weak_pf_pauses_at_20_trades(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    # 4 wins @ +2.0%, 16 losses @ -3.0%, n=20 -> PF = 8/48 = 0.17 < 0.5.
+    # A weak engine must not get 30 more trades of unthrottled volume just
+    # because it hasn't reached the 50-trade full-evidence bar.
+    _write_forced_history(n_wins=4, n_losses=16, pnl_win=2.0, pnl_loss=-3.0)
+    changes = EngineScorecard().apply_throttles()
+    assert changes["LIVE_FORCED"]["new"] == "paused"
 
 
 def test_get_mode_defaults_to_normal(tmp_path, monkeypatch):

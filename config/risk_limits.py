@@ -21,6 +21,13 @@ class RiskLimits:
     stop_loss_pct: float = 7.0               # hard stop below entry
     target_reward_ratio: float = 2.0         # target = entry + (stop_dist * ratio)
                                               # => min risk:reward of 1:2
+    # Nearest pivot R1 only caps the target when it sits at least this many
+    # multiples of the stop distance above entry — R1 = 2*pivot - prior_low
+    # routinely lands 0.5-1% above entry for a stock near its recent high,
+    # which is noise relative to a 7% stop (gross R:R ~0.1:1) and was firing
+    # POOR_RISK_REWARD on nearly every candidate. Below this ratio, R1 is
+    # not a meaningful target and the cost-aware target is used instead.
+    min_resistance_distance_ratio: float = 1.5
 
     # ── Conviction gate ─────────────────────────────────────────
     min_confidence: float = 0.80             # [0.0, 1.0). Never accept 1.0 — it means hallucination.

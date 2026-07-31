@@ -1014,7 +1014,7 @@ class CommandHandler:
     def _generate_improvement_tip(self, summary, forced, sim_wr, regime, thresholds=None):
         """Generates honest, specific improvement advice — explains what the
         adaptive learning loop is actually doing, not a generic tip."""
-        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, AdaptiveThresholds
+        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, MIN_EVIDENCE, AdaptiveThresholds
 
         thresh = thresholds if thresholds is not None else AdaptiveThresholds().load()
         regime_data = thresh.get(regime, {})
@@ -1024,12 +1024,19 @@ class CommandHandler:
         current_threshold = regime_data.get("judge_min", regime_default)
 
         lines = []
-        forced_total = forced.get("total", 0)
 
-        if forced_total < 15:
+        # Bug fix: this used to gate on forced.get("total", 0) — TODAY's
+        # closed forced-trade count, which resets to 0 every midnight — so
+        # the message read "0/15" for weeks regardless of the 80+ KB
+        # patterns and thousands of accumulated simulation trades. What
+        # actually gates AdaptiveThresholds.update_from_all_trades() is
+        # MIN_EVIDENCE (15) accumulated PER REGIME (regime_data["evidence"],
+        # a cumulative current-era count) — check that instead.
+        if evidence < MIN_EVIDENCE:
             lines.append(
-                f"*Learning phase:* {forced_total}/15 trades needed before adaptive "
-                "thresholds activate. System is accumulating evidence.")
+                f"*Learning phase ({regime}):* {evidence}/{MIN_EVIDENCE} regime-specific "
+                "trades needed before adaptive thresholds activate for this regime. "
+                "System is accumulating evidence.")
         elif regime_wr is not None:
             wr_pct = regime_wr * 100
             direction = "lowered (easier)" if current_threshold < regime_default else "raised (harder)"
