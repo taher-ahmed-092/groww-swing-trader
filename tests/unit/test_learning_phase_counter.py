@@ -1,8 +1,10 @@
-"""The "Learning phase: X/15" message was gated on forced.get("total", 0) —
-TODAY's closed forced-trade count, which resets every midnight — so it read
-"0/15" for weeks despite thousands of accumulated current-era simulation
-trades and 80+ KB patterns. It must gate on the actual MIN_EVIDENCE (15)
-per-regime cumulative evidence count that AdaptiveThresholds itself uses."""
+"""The "Learning phase: X/15" message was gated on the CURRENT regime's own
+evidence count. That count is genuinely and correctly zero/low for a regime
+that simply hasn't recurred much yet, even while other regimes (e.g. VOLATILE
+with 527 trades) already have adaptive thresholds active — so the message
+read as "the system failed to learn" when it was actually "this regime is
+rare." The message has been removed entirely rather than relabeled, since
+per-regime evidence is not a meaningful proxy for system-wide learning state."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -16,15 +18,13 @@ def _handler():
     return h
 
 
-def test_learning_phase_shown_when_regime_evidence_below_min():
+def test_no_learning_phase_message_when_regime_evidence_below_min():
     h = _handler()
     thresholds = {"VOLATILE": {"judge_min": 7.5, "evidence": 3, "win_rate": 0.4}}
-    # forced["total"] is deliberately 0 (today reset) to prove the message
-    # no longer depends on it.
     tip = h._generate_improvement_tip(
         {"total_trades": 100}, {"total": 0}, 50, "VOLATILE", thresholds=thresholds)
-    assert "Learning phase" in tip
-    assert "3/15" in tip
+    assert "Learning phase" not in tip
+    assert "3/15" not in tip
 
 
 def test_adaptive_threshold_shown_once_regime_evidence_clears_min():

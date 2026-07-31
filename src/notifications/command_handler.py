@@ -222,6 +222,16 @@ class CommandHandler:
         "TRANSITIONAL": ("🌀", "Reduced size. Wait for clarity."),
     }
 
+    @staticmethod
+    def _stale_suffix(regime: dict) -> str:
+        """' (last known · 31 Jul 15:30)' when regime data is a stale cache
+        (NSE closed, live fetch returned nothing) — never a bare label, so
+        /report can't be mistaken for the system having actually failed."""
+        if not regime.get("stale"):
+            return ""
+        cached_at = regime.get("cached_at")
+        return f" (last known · {cached_at})" if cached_at else " (no data yet)"
+
     def _get_learning_status(self) -> str:
         from src.memory.journal import TradingJournal
 
@@ -413,8 +423,9 @@ class CommandHandler:
         r = RegimeDetector().detect()
         regime = r.get("regime", "UNKNOWN")
         emoji, advice = self.REGIME_VISUALS.get(regime, ("❓", "Unknown — trade cautiously."))
+        regime_label = f"{regime}{self._stale_suffix(r)}"
         self._send(
-            f"{emoji} *MARKET REGIME: {regime}*\n"
+            f"{emoji} *MARKET REGIME: {regime_label}*\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📊 Nifty: ₹{(r.get('nifty_price') or 0):,.0f}\n"
             f"📈 RSI: {(r.get('rsi') or 0):.1f}\n"
@@ -907,6 +918,7 @@ class CommandHandler:
         }
         regime_name = regime.get("regime", "UNKNOWN")
         regime_emoji = regime_emoji_map.get(regime_name, "❓")
+        regime_label = f"{regime_name}{self._stale_suffix(regime)}"
         nifty = regime.get("nifty_price") or 0
         rsi = regime.get("rsi") or 0
 
@@ -958,7 +970,7 @@ class CommandHandler:
             "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
             "*🌍 Market*\n"
-            f"{regime_emoji} {regime_name}\n"
+            f"{regime_emoji} {regime_label}\n"
             f"Nifty ₹{nifty:,.0f} · RSI {rsi:.1f}\n"
             f"Advice: {str(regime.get('strategy', ''))[:60]}\n\n"
 
@@ -1014,7 +1026,7 @@ class CommandHandler:
     def _generate_improvement_tip(self, summary, forced, sim_wr, regime, thresholds=None):
         """Generates honest, specific improvement advice — explains what the
         adaptive learning loop is actually doing, not a generic tip."""
-        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, MIN_EVIDENCE, AdaptiveThresholds
+        from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, AdaptiveThresholds
 
         thresh = thresholds if thresholds is not None else AdaptiveThresholds().load()
         regime_data = thresh.get(regime, {})
@@ -1025,19 +1037,13 @@ class CommandHandler:
 
         lines = []
 
-        # Bug fix: this used to gate on forced.get("total", 0) — TODAY's
-        # closed forced-trade count, which resets to 0 every midnight — so
-        # the message read "0/15" for weeks regardless of the 80+ KB
-        # patterns and thousands of accumulated simulation trades. What
-        # actually gates AdaptiveThresholds.update_from_all_trades() is
-        # MIN_EVIDENCE (15) accumulated PER REGIME (regime_data["evidence"],
-        # a cumulative current-era count) — check that instead.
-        if evidence < MIN_EVIDENCE:
-            lines.append(
-                f"*Learning phase ({regime}):* {evidence}/{MIN_EVIDENCE} regime-specific "
-                "trades needed before adaptive thresholds activate for this regime. "
-                "System is accumulating evidence.")
-        elif regime_wr is not None:
+        # A regime with < MIN_EVIDENCE trades of its own says nothing about
+        # whether adaptive thresholds are active system-wide — other regimes
+        # (e.g. VOLATILE with 500+ trades) can already be adapted while the
+        # CURRENT regime just hasn't recurred often enough yet. Showing
+        # "0/15" here used to read as "the system failed to learn" instead of
+        # "this specific regime is rare" — so say nothing rather than mislead.
+        if regime_wr is not None:
             wr_pct = regime_wr * 100
             direction = "lowered (easier)" if current_threshold < regime_default else "raised (harder)"
             lines.append(

@@ -4,8 +4,16 @@ multiplier. The system trades differently in a bull trend vs a volatile chop.
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
 from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
+
+IST = ZoneInfo("Asia/Kolkata")
+LAST_KNOWN_REGIME_FILE = Path("data/cache/last_known_regime.json")
 
 
 class RegimeDetector:
@@ -24,11 +32,7 @@ class RegimeDetector:
             df = None
 
         if df is None or df.empty:
-            return {
-                "regime": "UNKNOWN", "strategy": "Data unavailable — trade cautiously.",
-                "size_multiplier": 0.75, "nifty_price": None, "ma50": None,
-                "ma200": None, "rsi": None, "adx": None,
-            }
+            return self._load_last_known()
 
         indicators = compute_indicators(df)
         current = float(df["Close"].iloc[-1])
@@ -40,8 +44,38 @@ class RegimeDetector:
             "ma200": round(indicators.get("ma_200") or current, 2),
             "rsi": round(indicators.get("rsi_14") or 50, 2),
             "adx": round(indicators.get("adx_14") or 20, 2),
+            "stale": False,
         })
+        self._save_last_known(result)
         return result
+
+    @staticmethod
+    def _save_last_known(result: dict) -> None:
+        try:
+            LAST_KNOWN_REGIME_FILE.parent.mkdir(parents=True, exist_ok=True)
+            cached = dict(result)
+            cached["cached_at"] = datetime.now(IST).strftime("%d %b %H:%M")
+            LAST_KNOWN_REGIME_FILE.write_text(json.dumps(cached))
+        except Exception:
+            pass  # caching the regime must never block a live detection
+
+    @staticmethod
+    def _load_last_known() -> dict:
+        try:
+            if LAST_KNOWN_REGIME_FILE.exists():
+                cached = json.loads(LAST_KNOWN_REGIME_FILE.read_text())
+                cached["stale"] = True
+                return cached
+        except Exception:
+            pass
+
+        # No cache ever written (e.g. first-ever run with NSE closed) — the
+        # only case where UNKNOWN/₹0 is unavoidable.
+        return {
+            "regime": "UNKNOWN", "strategy": "Data unavailable — trade cautiously.",
+            "size_multiplier": 0.75, "nifty_price": None, "ma50": None,
+            "ma200": None, "rsi": None, "adx": None, "stale": True, "cached_at": None,
+        }
 
     @staticmethod
     def classify(indicators: dict, current: float, recent_range: float) -> dict:

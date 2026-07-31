@@ -50,16 +50,18 @@ def check_all() -> dict:
     except Exception as e:
         results["indicators"] = {"ok": False, "error": str(e)[:50]}
 
-    # 3. Scout quality
+    # 3. Data pipeline liveness (fast proxy for scout — a full 241-symbol
+    # scout scan can take minutes and blows the 120s job timeout; this just
+    # confirms yfinance is reachable and returning real bars).
     try:
-        from src.agents.scout.agent import ScoutAgent
+        import concurrent.futures
 
-        candidates = ScoutAgent().scan()
-        results["scout"] = {
-            "ok": len(candidates) > 0,
-            "candidates": len(candidates),
-            "top": candidates[0]["symbol"] if candidates else None,
-        }
+        from src.data.fetcher import MarketDataFetcher
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(MarketDataFetcher().get_price_history, "RELIANCE", period="5d")
+            df = future.result(timeout=10)
+        results["scout"] = {"ok": df is not None and len(df) > 0, "rows": len(df) if df is not None else 0}
     except Exception as e:
         results["scout"] = {"ok": False, "error": str(e)[:50]}
 
@@ -154,7 +156,7 @@ def format_telegram_report(results: dict) -> str:
     checks = [
         ("Data Pipeline", "data_pipeline", lambda r: f"{r.get('rows', 0)} rows"),
         ("Indicators", "indicators", _fmt_rsi),
-        ("Scout", "scout", lambda r: f"{r.get('candidates', 0)} candidates"),
+        ("Data Fetch (fast)", "scout", lambda r: f"{r.get('rows', 0)} rows"),
         ("Pairs Trading", "pairs", lambda r: f"{r.get('opportunities', 0)} opps"),
         ("Knowledge Base", "knowledge_base", lambda r: f"{r.get('total', 0)} patterns"),
         ("Auto Rules", "auto_rules", lambda r: f"{r.get('total', 0)} rules"),
