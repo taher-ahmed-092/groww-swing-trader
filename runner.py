@@ -889,6 +889,32 @@ def intraday_exit_job() -> None:
     console.print(f"[cyan][JOB] intraday_exit_job closed {n} sims[/cyan]")
 
 
+_SIM_LOG_SENT_FILE = Path("data/cache/sim_log_sent_today.json")
+
+
+def _sim_log_already_sent(symbol: str) -> bool:
+    """intraday_scan_job calls _run_guarantee every 30 min; on a day with no
+    qualifying setup, DailyTradeGuarantee re-simulates (and this job re-notifies)
+    the same symbol every retry — 12+ identical Telegram messages for one
+    symbol in one day. Dedupe per (symbol, IST calendar day)."""
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    try:
+        sent = json.loads(_SIM_LOG_SENT_FILE.read_text()) if _SIM_LOG_SENT_FILE.exists() else {}
+    except Exception:
+        sent = {}
+    if sent.get("date") != today_str:
+        sent = {"date": today_str, "symbols": []}
+    already = symbol in sent["symbols"]
+    if not already:
+        sent["symbols"].append(symbol)
+        try:
+            _SIM_LOG_SENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _SIM_LOG_SENT_FILE.write_text(json.dumps(sent))
+        except Exception:
+            pass  # dedupe file is best-effort — never blocks the job on a write error
+    return already
+
+
 def _run_guarantee(label: str, target: int) -> None:
     """Shared daily-guarantee runner. Takes the best available trade through the
     FULL pipeline (judge + risk + stop) if below `target`; notifies on Telegram."""
@@ -899,7 +925,8 @@ def _run_guarantee(label: str, target: int) -> None:
     taken = DailyTradeGuarantee().ensure_minimum_trades(target=target)
     notifier = TelegramNotifier()
     for t in taken:
-        symbol_esc = escape_markdown(str(t.get("symbol", "")))
+        symbol = str(t.get("symbol", ""))
+        symbol_esc = escape_markdown(symbol)
         strategy_esc = escape_markdown(str(t.get("strategy", "")))
         if t.get("outcome") == "executed":
             notifier.send_message(
@@ -907,6 +934,8 @@ def _run_guarantee(label: str, target: int) -> None:
                 "Paper trade for daily learning — full pipeline (judge + risk + stop)."
             )
         elif t.get("outcome") == "simulated":
+            if _sim_log_already_sent(symbol):
+                continue
             notifier.send_message(
                 f"🔬 No setup cleared the judge today — logged {symbol_esc} "
                 f"({strategy_esc}) as a simulation so the system still learns."
@@ -1159,12 +1188,20 @@ def forced_close_job() -> None:
             _broadcast_trade_event_safe("TRADE_CLOSED", t)
 
 
+_CONT_SIM_BACKOFF_UNTIL = 0.0  # epoch seconds; 0 = no backoff pending
+
+
 def continuous_sim_job() -> None:
     """Every 30 minutes, 24/7 — unlimited historical-data paper simulations.
     Runs regardless of market hours; during market hours it augments
     forced_trade_job's live activity, off-hours it's the only source of new
     learning data (src/learning/continuous_simulator.py)."""
+    global _CONT_SIM_BACKOFF_UNTIL
     if _kill_switch() or _is_scan_running():
+        return
+    if _CONT_SIM_BACKOFF_UNTIL and time.time() < _CONT_SIM_BACKOFF_UNTIL:
+        console.print("[dim][CONT-SIM] skipping this run — backing off after full-batch failure[/dim]")
+        _CONT_SIM_BACKOFF_UNTIL = 0.0
         return
     from src.learning.continuous_simulator import ContinuousSimulator
 
@@ -1172,6 +1209,7 @@ def continuous_sim_job() -> None:
     windows = result.get("windows_evaluated", 0)
     skipped = result.get("skipped_no_signal", 0)
     failures = result.get("fetch_failures", 0)
+    attempted = len(result.get("batch_symbols", []))
     if result["simulated"] > 0:
         console.print(
             f"[cyan][CONT-SIM] {result['simulated']} sims: "
@@ -1179,7 +1217,16 @@ def continuous_sim_job() -> None:
             f"{result['new_patterns']} new patterns[/cyan]")
     elif windows > 0 and skipped >= windows:
         console.print(f"[dim][CONT-SIM] {windows} windows, {skipped} skipped — quiet market[/dim]")
-    if failures > 0 and failures > len(result.get("batch_symbols", [])) / 2:
+    if failures > 0 and attempted > 0 and failures == attempted:
+        # Every symbol in the batch failed — not those specific symbols'
+        # fault (the per-symbol 3-strikes quarantine in continuous_simulator
+        # would wrongly blame them). More likely a rate limit or network
+        # blip hitting the whole batch at once; back off one cycle instead.
+        msg = "[CONT-SIM] FULL BATCH FAILURE — likely rate-limited or network down, backing off 5 min"
+        console.print(f"[red]{msg}[/red]")
+        log.warning(msg)
+        _CONT_SIM_BACKOFF_UNTIL = time.time() + 300
+    elif failures > 0 and failures > attempted / 2:
         msg = f"[CONT-SIM] {failures} fetch failures — check network"
         console.print(f"[yellow]{msg}[/yellow]")
         log.warning(msg)

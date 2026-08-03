@@ -161,6 +161,14 @@ class TechnicalAgent:
             symbol, df, indicators, strat_ctx, regime
         )
         strategy_name = strat_signal.get("strategy_name", "momentum")
+        if strategy_name == "none":
+            # No library strategy (momentum/mean_reversion/breakout/pairs)
+            # fired a BUY of its own, but the core technical logic below can
+            # still produce a BUY from entry_recommendation/judge — tag it
+            # from indicators rather than leaving it "none" in the journal.
+            from src.analytics.strategy_attribution import classify_strategy
+
+            strategy_name = classify_strategy(indicators)
         if strat_signal.get("signal") == "BUY":
             entry_price = strat_signal["entry_price"]
             stop_price = strat_signal["stop_price"]
