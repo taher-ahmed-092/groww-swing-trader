@@ -511,6 +511,7 @@ def collect_dashboard_data() -> dict:
             "next_jobs": _next_jobs(now_ist),
             "summary": {
                 "total_trades": summary.get("total_trades", 0),
+                "open_trades": len(open_trades),
                 "win_rate": round(summary.get("win_rate", 0) * 100, 1),
                 "avg_win_pct": round(summary.get("avg_win_pct", 0), 2),
                 "avg_loss_pct": round(summary.get("avg_loss_pct", 0), 2),

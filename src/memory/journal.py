@@ -632,6 +632,12 @@ class TradingJournal:
                 select(TradeRecord).where(TradeRecord.outcome == "OPEN")
             ).all())
 
+    def get_closed_trades(self) -> list[TradeRecord]:
+        with Session(self.engine) as session:
+            return list(session.exec(
+                select(TradeRecord).where(TradeRecord.outcome != "OPEN")
+            ).all())
+
     def get_strategy_win_rate(self, strategy_name: str, regime: Optional[str] = None) -> Optional[float]:
         """Win rate for a strategy (optionally within a regime). None if < 3 trades."""
         with Session(self.engine) as session:

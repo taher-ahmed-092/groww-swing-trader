@@ -817,6 +817,10 @@ class CommandHandler:
         j = TradingJournal()
         pa = PerformanceAnalyzer()
         summary = pa.get_summary()
+        open_real = j.get_open_trades()
+        closed_real = j.get_closed_trades()
+        wins_real = sum(1 for t in closed_real if t.outcome == "WIN")
+        losses_real = len(closed_real) - wins_real
         regime = RegimeDetector().detect()
         forced = AlwaysOnTrader().get_todays_summary()
         try:
@@ -943,9 +947,14 @@ class CommandHandler:
                 mode = throttles.get(engine, {}).get("mode", "normal")
                 mode_text = mode_icon.get(mode, "")
                 pf_str = "∞" if stats["profit_factor"] >= 999 else f"{stats['profit_factor']:.2f}"
+                # REAL carries live open positions with no realized pnl_pct
+                # yet — "0t" would read as "nothing happening" when e.g.
+                # OFSS/TANLA are open with real capital deployed.
+                trades_label = (f"{stats.get('n_open', 0)} open, {stats['n_trades']} closed"
+                                 if engine == "REAL" else f"{stats['n_trades']}t")
                 score_lines.append(
                     f"  {engine}: PF {pf_str} · {stats['win_rate'] * 100:.0f}% WR "
-                    f"({stats['n_trades']}t) {mode_text}".rstrip())
+                    f"({trades_label}) {mode_text}".rstrip())
             scorecard_text = "\n".join(score_lines) or "  Still building..."
         except Exception:
             scorecard_text = "  Unavailable"
@@ -974,8 +983,9 @@ class CommandHandler:
             f"Nifty ₹{nifty:,.0f} · RSI {rsi:.1f}\n"
             f"Advice: {str(regime.get('strategy', ''))[:60]}\n\n"
 
-            "*📈 Real Pipeline Trades*\n"
-            f"Total: {summary.get('total_trades', 0)}\n"
+            "*📈 Real Trades*\n"
+            f"{len(open_real)} open, {len(closed_real)} closed "
+            f"({wins_real}W/{losses_real}L)\n"
             f"Win rate: {summary.get('win_rate', 0) * 100:.1f}%\n"
             f"P&L: ₹{summary.get('total_pnl_inr', 0):+.2f}\n\n"
 

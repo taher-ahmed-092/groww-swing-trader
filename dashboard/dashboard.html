@@ -440,7 +440,7 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
   </div>
 
   <div class="stat-grid">
-    <div class="stat-tile"><div class="stat-tile__num" id="metric-trades">0</div><div class="stat-tile__label">Real pipeline trades</div></div>
+    <div class="stat-tile"><div class="stat-tile__num" id="metric-trades" style="font-size:16px">—</div><div class="stat-tile__label">Real trades</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-wr">0%</div><div class="stat-tile__label">Real pipeline win rate</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-pnl">₹0</div><div class="stat-tile__label">Real pipeline P&amp;L</div></div>
     <div class="stat-tile"><div class="stat-tile__num" id="metric-kb">0</div><div class="stat-tile__label">KB patterns (all)</div></div>
@@ -1173,7 +1173,12 @@ function updateDashboard(d){
     `NET (honest): ${ev.toFixed(2)}% | GROSS (pre-cost): ${(ct.gross_expectancy_pct||0).toFixed(2)}% | `+
     `Avg win: ${ct.avg_win_pct}% | Avg loss: ${ct.avg_loss_pct}% | Break-even WR: ${ct.breakeven_wr}%`);
 
-  countUp(document.getElementById('metric-trades'),s.total_trades||0,1000);
+  const tradesEl=document.getElementById('metric-trades');
+  if(tradesEl){
+    const closedN=s.total_trades||0,openN=s.open_trades||0;
+    const wonN=Math.round(closedN*(s.win_rate||0)/100),lostN=closedN-wonN;
+    tradesEl.textContent=`${openN} open, ${closedN} closed (${wonN}W/${lostN}L)`;
+  }
   countUp(document.getElementById('metric-wr'),s.win_rate||0,1200,'','%',1);
   countUp(document.getElementById('metric-pnl'),s.total_pnl_inr||0,1200,'₹','',2);
   countUp(document.getElementById('metric-kb'),learning.kb_patterns||(d.knowledge||[]).length,800);
@@ -1298,9 +1303,12 @@ function updateDashboard(d){
       const pf=s.profit_factor>=999?'∞':(s.profit_factor||0).toFixed(2);
       const nTrades=s.n_trades||0;
       const wr=nTrades>0?((s.win_rate||0)*100).toFixed(0)+'% WR':'— (not seen yet)';
+      // REAL carries live open positions with no realized pnl_pct yet —
+      // "0t" would read as "nothing happening" despite real capital deployed.
+      const tradesLabel=engine==='REAL'?`${s.n_open||0} open, ${nTrades} closed`:`${nTrades}t`;
       return `<div class="scorecard-row" title="${reason}">`+
         `<span>${engine}</span>`+
-        `<span>PF ${pf} · ${wr} (${nTrades}t)</span>`+
+        `<span>PF ${pf} · ${wr} (${tradesLabel})</span>`+
         `<span class="status-badge ${mode}">${modeIcon[mode]||mode}</span></div>`;
     }).join(''):'<div>Still building...</div>';
   }

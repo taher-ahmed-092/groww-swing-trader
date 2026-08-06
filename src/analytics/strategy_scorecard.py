@@ -57,6 +57,12 @@ _ENGINE_SOURCES = {
     "SHORT_SIM": ("data/cache/short_trades_history.json", lambda t: True),
 }
 
+# REAL (actual paper-broker fills — TradingJournal, not a JSON cache) is
+# handled separately from _ENGINE_SOURCES: it's real signal-quality evidence,
+# never a disposable practice squad, so apply_throttles() must never write a
+# throttle/pause/retire entry for it (see the explicit skip below).
+REAL_ENGINE = "REAL"
+
 
 def log_adaptation(entry_type: str, detail: str, evidence: str) -> None:
     """Shared adaptation-log writer — makes every self-adjustment visible,
@@ -101,7 +107,40 @@ class EngineScorecard:
             trades = self._load_matching(fname, matcher)
             current_era, _all_time = split_by_era(trades)
             scorecard[engine] = self._score(current_era[-100:])
+        scorecard[REAL_ENGINE] = self._score_real()
         return scorecard
+
+    @staticmethod
+    def _score_real() -> dict:
+        """REAL reads live paper-broker fills from the journal, not a JSON
+        cache — the actual pipeline's signal quality, scored the same way as
+        the other engines (PF/WR/expectancy over the last 100 current-era
+        CLOSED trades) plus n_open, since open positions carry live
+        unrealized P&L but no realized pnl_pct yet."""
+        from sqlmodel import Session, select
+
+        from src.analytics.era import split_by_era
+        from src.memory.journal import TradeRecord, TradingJournal
+
+        journal = TradingJournal()
+        with Session(journal.engine) as session:
+            closed = list(session.exec(
+                select(TradeRecord).where(TradeRecord.outcome != "OPEN")
+                .order_by(TradeRecord.id.asc())
+            ).all())
+            n_open = len(list(session.exec(
+                select(TradeRecord).where(TradeRecord.outcome == "OPEN")
+            ).all()))
+
+        closed_dicts = [
+            {"outcome": t.outcome, "pnl_pct": t.pnl_pct or 0,
+             "closed_at": t.closed_at.isoformat() if t.closed_at else None}
+            for t in closed
+        ]
+        current_era, _all_time = split_by_era(closed_dicts)
+        scored = EngineScorecard._score(current_era[-100:])
+        scored["n_open"] = n_open
+        return scored
 
     def reevaluate_if_stale(self) -> None:
         """If engine_throttle.json holds any "paused"/"throttled" state
@@ -137,6 +176,13 @@ class EngineScorecard:
         changes: dict = {}
 
         for engine, stats in scorecard.items():
+            if engine == REAL_ENGINE:
+                # Real signal-quality evidence, not a disposable practice
+                # engine — never throttled/paused/retired on early PF. No
+                # throttle-file entry is written, so get_mode("REAL") always
+                # reads back "normal" via its own default.
+                continue
+
             n = stats["n_trades"]
             pf = stats["profit_factor"]
             prev_mode = current.get(engine, {}).get("mode", "normal")
