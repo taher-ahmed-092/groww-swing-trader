@@ -12,25 +12,26 @@ STRATEGIES = ("mean_reversion", "breakout", "pairs_trading", "momentum")
 
 def classify_strategy(indicators: dict, is_pairs: bool = False) -> str:
     """Classifies a trade's strategy from its entry-time indicators.
-    Priority: pairs > mean_reversion (oversold + above MA200) >
-    breakout (52W high/breakout + volume) > momentum (default)."""
+    Priority: pairs > mean_reversion (oversold, not in a confirmed downtrend) >
+    breakout (near 52W high + volume surge) > momentum (default).
+
+    Was previously keyed on "close", "ma_200" and "near_52w_high"/"flags" —
+    none of which compute_indicators() ever populates (it produces "trend"
+    and "week52_position" instead), so mean_reversion/breakout could never
+    fire from any real call site and every trade fell through to momentum."""
     if is_pairs:
         return "pairs_trading"
 
     indicators = indicators or {}
     rsi = indicators.get("rsi_14")
-    ma200 = indicators.get("ma_200")
-    close = indicators.get("close")
+    trend = indicators.get("trend")
     volume_ratio = indicators.get("volume_ratio")
-    flags = indicators.get("flags") or []
+    week52_position = indicators.get("week52_position")
 
-    if rsi is not None and rsi < 35 and ma200 is not None and close is not None and close > ma200:
+    if rsi is not None and rsi < 35 and trend != "DOWNTREND":
         return "mean_reversion"
 
-    is_breakout = ("BREAKOUT" in flags) or (
-        indicators.get("near_52w_high") and volume_ratio is not None and volume_ratio > 1.5
-    )
-    if is_breakout:
+    if week52_position == "NEAR_HIGH" and volume_ratio is not None and volume_ratio > 1.5:
         return "breakout"
 
     return "momentum"

@@ -111,12 +111,6 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 .stat-tile__label{font-family:var(--font-body);font-size:10px;letter-spacing:1px;
   color:var(--text-muted);text-transform:uppercase;margin-top:4px;font-weight:600}
 
-.flight-log{margin-top:8px}
-.flight-log__title{font-family:var(--font-display);font-weight:700;font-size:14px;margin-bottom:8px;color:var(--cyan)}
-.flight-log__item{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);
-  padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06)}
-.flight-log__item.win{color:var(--green)}.flight-log__item.loss{color:var(--red)}
-
 /* ── Room 2: Hangar ── */
 .positions-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
 .position-card{background:var(--panel-bg);backdrop-filter:blur(16px);border:1px solid var(--panel-border);
@@ -390,6 +384,8 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
 <section class="room" id="room-1">
   <div class="room__title">Welcome back, <span id="owner">__OWNER_NAME__</span>! 👋</div>
   <div class="room__sub">Mission Control · your AI trading system, live</div>
+  <div id="mission-summary-line" style="font-family:var(--font-body);font-size:14px;
+    color:var(--text);margin:-8px 0 20px;font-weight:600"></div>
 
   <div class="scoreboard" id="scoreboard">
     <div class="sb-tile">
@@ -456,16 +452,12 @@ header.site-head{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;
     <div class="stat-tile"><div class="stat-tile__num" id="metric-replay">0</div><div class="stat-tile__label">Replay Patterns</div></div>
   </div>
 
-  <div class="panel flight-log">
-    <div class="flight-log__title">📡 Flight Log</div>
-    <div id="flight-log-list"><div class="flight-log__item">Waiting for the first trade...</div></div>
-    <div class="legend-row">
-      <span class="legend-item"><span class="legend-swatch" style="background:#ffd93d"></span>✈️ Real</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#4dd8ff"></span>✈️ Forced</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#3ddc97"></span>✈️ Intraday</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#ff6ec7"></span>✈️ Short</span>
-      <span class="legend-item"><span class="legend-swatch" style="background:#c9c9d9"></span>📡 Replay squadron</span>
-    </div>
+  <div class="legend-row">
+    <span class="legend-item"><span class="legend-swatch" style="background:#ffd93d"></span>✈️ Real</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:#4dd8ff"></span>✈️ Forced</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:#3ddc97"></span>✈️ Intraday</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:#ff6ec7"></span>✈️ Short</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:#c9c9d9"></span>📡 Replay squadron</span>
   </div>
 </section>
 
@@ -703,7 +695,6 @@ function _drainPlaneQueue(){
   const event=_planeQueue.shift();
   if(event.type==='SQUADRON'){_launchSquadron(event);}
   else{_launchSinglePlane(event);}
-  addFlightLogEntry(event);
   if(_planeQueue.length)setTimeout(_drainPlaneQueue,700);
 }
 
@@ -819,24 +810,6 @@ function spawnConfetti(x,y){
     ],{duration:900,easing:'ease-out',fill:'forwards'});
     setTimeout(()=>bit.remove(),900);
   }
-}
-
-const _flightLog=[];
-function addFlightLogEntry(event){
-  let label,cls='';
-  if(event.type==='SQUADRON'){
-    label=`📡 Replay squadron: ${event.wins}W/${event.losses}L from ${event.count} stocks`;
-  }else{
-    const won=event.outcome==='WIN';
-    cls=event.type==='TRADE_CLOSED'?(won?'win':'loss'):'';
-    label=event.type==='TRADE_CLOSED'
-      ? `${event.symbol} closed ${won?'WIN':'LOSS'} ${(event.pnl_pct||0).toFixed(1)}%`
-      : `${event.symbol} opened @ ₹${(event.entry||0).toFixed(0)}`;
-  }
-  _flightLog.unshift({label,cls});
-  _flightLog.splice(5);
-  const el=document.getElementById('flight-log-list');
-  el.innerHTML=_flightLog.map(e=>`<div class="flight-log__item ${e.cls}">${e.label}</div>`).join('');
 }
 
 // ── Warp flash on room enter ──
@@ -1152,6 +1125,17 @@ function updateDashboard(d){
 
   document.getElementById('owner').textContent=d.owner||OWNER;
 
+  const missionEl=document.getElementById('mission-summary-line');
+  if(missionEl){
+    const today=(d.timestamp||'').slice(0,10);
+    const realToday=(d.positions||[]).filter(p=>p.source==='real'&&(p.opened_at||'').slice(0,10)===today).length;
+    const practiceToday=forced.opened_today||0;
+    const status=d.kill_switch?'⏸ halted (kill switch active)':
+      d.market_open?'📈 actively scanning the live market':'🌙 learning 24/7 (market closed)';
+    missionEl.textContent=`System has made ${realToday} real decision${realToday===1?'':'s'} today, `+
+      `learned from ${practiceToday} practice trade${practiceToday===1?'':'s'}, and is currently ${status}.`;
+  }
+
   const ct=d.combined_totals||{};
   const ctAll=d.combined_totals_all_time||{};
   document.getElementById('scoreboard')?.setAttribute('title',
@@ -1312,9 +1296,11 @@ function updateDashboard(d){
       const mode=(throttles[engine]||{}).mode||'normal';
       const reason=(throttles[engine]||{}).reason||'';
       const pf=s.profit_factor>=999?'∞':(s.profit_factor||0).toFixed(2);
+      const nTrades=s.n_trades||0;
+      const wr=nTrades>0?((s.win_rate||0)*100).toFixed(0)+'% WR':'— (not seen yet)';
       return `<div class="scorecard-row" title="${reason}">`+
         `<span>${engine}</span>`+
-        `<span>PF ${pf} · ${((s.win_rate||0)*100).toFixed(0)}% WR (${s.n_trades||0}t)</span>`+
+        `<span>PF ${pf} · ${wr} (${nTrades}t)</span>`+
         `<span class="status-badge ${mode}">${modeIcon[mode]||mode}</span></div>`;
     }).join(''):'<div>Still building...</div>';
   }
@@ -1343,10 +1329,14 @@ function updateDashboard(d){
       stratEl.innerHTML='<tr><td colspan="5" style="padding:8px;color:var(--text-muted)">No strategy data yet.</td></tr>';
     }else{
       const bestKey=rows.reduce((best,[k,v])=>((v.win_rate||0)>((bd[best]||{}).win_rate||0)?k:best),rows[0][0]);
-      stratEl.innerHTML=rows.map(([name,s])=>
-        `<tr class="${name===bestKey?'best':''}"><td>${name}</td><td>${s.trades||s.n_trades||0}</td>`+
-        `<td>${((s.win_rate||0)*100).toFixed(0)}%</td><td>${(s.avg_pnl||s.avg_pnl_pct||0).toFixed(2)}%</td>`+
-        `<td>${s.best_regime||'—'}</td></tr>`).join('');
+      stratEl.innerHTML=rows.map(([name,s])=>{
+        const trades=s.trades||s.n_trades||0;
+        const wr=trades>0?((s.win_rate||0)*100).toFixed(0)+'%':'— (not seen yet)';
+        const avgPnl=trades>0?(s.avg_pnl||s.avg_pnl_pct||0).toFixed(2)+'%':'—';
+        return `<tr class="${name===bestKey?'best':''}"><td>${name}</td><td>${trades}</td>`+
+          `<td>${wr}</td><td>${avgPnl}</td>`+
+          `<td>${s.best_regime||'—'}</td></tr>`;
+      }).join('');
     }
   }
 
