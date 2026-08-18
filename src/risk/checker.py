@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -101,6 +101,32 @@ def check_capital_sanity(portfolio_value_inr: float = DEFAULT_PORTFOLIO_VALUE_IN
             "max_risk_inr": max_risk_inr, "min_viable_capital": min_viable_capital,
             "unaffordable_count": len(unaffordable), "unaffordable_symbols": unaffordable,
             "message": message}
+
+
+# Real (TradeRecord) positions have no engine-defined max hold — they exit on
+# stop/target only, checked by daily_postmarket_job. This threshold mirrors
+# AlwaysOnTrader.MAX_HOLD_DAYS purely as a "this has gone unmonitored too
+# long" tripwire for the startup staleness check, not an auto-exit rule.
+STALE_POSITION_MAX_HOLD_DAYS = 5
+
+
+def find_stale_open_positions(journal: TradingJournal | None = None) -> list[dict]:
+    """Startup check (2026-08 incident: laptop off 11 days, TANLA drifted to
+    -7.2% within 1pp of its -8.2% stop with nobody checking it) — any OPEN
+    real trade older than STALE_POSITION_MAX_HOLD_DAYS gets flagged here so
+    the caller can alert + force an immediate price check instead of waiting
+    for the next scheduled daily_postmarket_job run."""
+    j = journal or TradingJournal()
+    now = datetime.now()
+    stale = []
+    for t in j.get_open_trades():
+        opened_at = t.executed_at or t.proposed_at
+        if not opened_at:
+            continue
+        age_days = (now - opened_at).days
+        if age_days >= STALE_POSITION_MAX_HOLD_DAYS:
+            stale.append({"trade": t, "age_days": age_days})
+    return stale
 
 
 def is_daily_loss_halted() -> bool:

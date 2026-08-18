@@ -560,6 +560,52 @@ def market_open_scan_job() -> None:
     _log_top_rejections("market_open_scan_job", len(candidates), rejections)
 
 
+def _startup_stale_position_check() -> None:
+    """Runs once at boot (see __main__ below, which fires within the first
+    ~30s of scripts/start_everything.py starting runner.py as a subprocess) —
+    alerts + immediately prices/closes-if-due any open real position that
+    went unmonitored because the process wasn't running. Does NOT wait for
+    the next scheduled daily_postmarket_job, which could be up to 24h away."""
+    from src.risk.checker import STALE_POSITION_MAX_HOLD_DAYS, find_stale_open_positions
+
+    stale = find_stale_open_positions()
+    if not stale:
+        return
+
+    journal = TradingJournal()
+    fetcher = MarketDataFetcher()
+    reflector = PostTradeReflector(journal)
+    notifier = TelegramNotifier()
+
+    for entry in stale:
+        trade, age_days = entry["trade"], entry["age_days"]
+        price = fetcher.get_current_price(trade.symbol)
+        pct_str = ""
+        if price is not None and trade.entry_price:
+            pct_from_entry = (price - trade.entry_price) / trade.entry_price * 100
+            pct_str = f", currently {pct_from_entry:+.1f}%"
+        stop_str = f", stop at ₹{trade.stop_price:.2f}" if trade.stop_price else ""
+        notifier.send_message(
+            f"⚠️ STALE POSITION: {trade.symbol} open {age_days} days "
+            f"(max hold {STALE_POSITION_MAX_HOLD_DAYS}d){pct_str}{stop_str} — checking now.")
+        console.print(f"[yellow][STARTUP] stale position {trade.symbol} ({age_days}d) — checking[/yellow]")
+
+        if price is None:
+            continue
+        hit_stop = trade.stop_price is not None and price <= trade.stop_price
+        hit_target = trade.target_price is not None and price >= trade.target_price
+        if not (hit_stop or hit_target):
+            continue
+
+        closed = journal.log_closed(trade.id, price)
+        reflector.reflect(closed)
+        notifier.send_message(
+            f"{'🎯' if hit_target else '🛑'} Closed {trade.symbol} @ ₹{price:.2f} "
+            f"({'TARGET' if hit_target else 'STOP'}) → {closed.outcome}")
+        console.print(f"[magenta][STARTUP] closed {trade.symbol} @ {price} "
+                      f"({'TARGET' if hit_target else 'STOP'}) → {closed.outcome}[/magenta]")
+
+
 def daily_postmarket_job() -> None:
     if _kill_switch():
         return
@@ -1381,6 +1427,14 @@ if __name__ == "__main__":
         EngineScorecard().reevaluate_if_stale()
     except Exception as exc:
         console.print(f"[yellow]Engine throttle re-eval failed: {exc}[/yellow]")
+
+    # Startup stale-position check: a laptop-off outage leaves open real
+    # positions unmonitored until the next scheduled daily_postmarket_job
+    # (up to 24h away) — check + close-if-due immediately instead.
+    try:
+        _startup_stale_position_check()
+    except Exception as exc:
+        console.print(f"[yellow]Stale-position check failed: {exc}[/yellow]")
 
     scheduler = BackgroundScheduler(
         timezone=TZ,

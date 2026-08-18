@@ -821,6 +821,12 @@ class CommandHandler:
         closed_real = j.get_closed_trades()
         wins_real = sum(1 for t in closed_real if t.outcome == "WIN")
         losses_real = len(closed_real) - wins_real
+        oldest_open_days = 0
+        if open_real:
+            opened_ats = [t.executed_at or t.proposed_at for t in open_real
+                          if t.executed_at or t.proposed_at]
+            if opened_ats:
+                oldest_open_days = (datetime.now() - min(opened_ats)).days
         regime = RegimeDetector().detect()
         forced = AlwaysOnTrader().get_todays_summary()
         try:
@@ -974,6 +980,10 @@ class CommandHandler:
         except Exception:
             adapt_lines = ["  Unavailable"]
 
+        improvement_tip = self._generate_improvement_tip(
+            summary, forced, sim_wr, regime_name,
+            n_open_real=len(open_real), oldest_open_days=oldest_open_days)
+
         msg = (
             "📊 *FULL SYSTEM REPORT*\n"
             "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1027,13 +1037,14 @@ class CommandHandler:
             f"{chr(10).join(adapt_lines)}\n\n"
 
             "*💡 What to Improve*\n"
-            f"{self._generate_improvement_tip(summary, forced, sim_wr, regime_name)}\n\n"
+            f"{improvement_tip}\n\n"
 
             f"_Updated: {datetime.now(ZoneInfo('Asia/Kolkata')).strftime('%d %b %H:%M IST')}_"
         )
         self._send(msg)
 
-    def _generate_improvement_tip(self, summary, forced, sim_wr, regime, thresholds=None):
+    def _generate_improvement_tip(self, summary, forced, sim_wr, regime, thresholds=None,
+                                   n_open_real=0, oldest_open_days=0):
         """Generates honest, specific improvement advice — explains what the
         adaptive learning loop is actually doing, not a generic tip."""
         from src.memory.adaptive_thresholds import DEFAULT_THRESHOLDS, AdaptiveThresholds
@@ -1061,10 +1072,16 @@ class CommandHandler:
                 f"{direction} based on {evidence} trades ({wr_pct:.0f}% win rate).")
 
         if summary.get("total_trades", 0) == 0:
-            lines.append(
-                "*Real pipeline trades:* 0 so far. This is normal — the pipeline "
-                "correctly protects from bad companies (Piotroski F=0) and choppy "
-                "markets (ADX<15). Run /scan at 10AM IST for best results.")
+            if n_open_real > 0:
+                lines.append(
+                    f"*Real pipeline trades:* {n_open_real} real position(s) currently open, "
+                    f"oldest {oldest_open_days} day(s) — check they haven't drifted past "
+                    "their intended hold window.")
+            else:
+                lines.append(
+                    "*Real pipeline trades:* 0 so far. This is normal — the pipeline "
+                    "correctly protects from bad companies (Piotroski F=0) and choppy "
+                    "markets (ADX<15). Run /scan at 10AM IST for best results.")
 
         return "\n".join(lines) if lines else "System is performing as expected."
 

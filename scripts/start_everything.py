@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -46,10 +47,46 @@ signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
 
+def _dns_resolves(host: str = "api.telegram.org") -> bool:
+    try:
+        socket.gethostbyname(host)
+        return True
+    except OSError:
+        return False
+
+
+def _ensure_dns_resolves() -> None:
+    """WSL loses its DNS resolver config on every Windows sleep/resume cycle
+    (resolv.conf points at a stale WSL-NAT nameserver), silently breaking
+    Telegram/GitHub connectivity on restart until the user manually writes
+    public nameservers to /etc/resolv.conf. Do that automatically instead."""
+    if _dns_resolves():
+        console.print("[dim]DNS check: ok.[/]")
+        return
+
+    console.print("[yellow]DNS resolution failed (api.telegram.org) — "
+                  "likely a WSL/Windows sleep-cycle resolver reset. "
+                  "Writing public nameservers to /etc/resolv.conf…[/]")
+    try:
+        Path("/etc/resolv.conf").write_text("nameserver 8.8.8.8\nnameserver 8.8.4.4\n")
+    except OSError as exc:
+        console.print(f"[red]DNS auto-fix failed: could not write /etc/resolv.conf ({exc}). "
+                      "Tunnel/Telegram connectivity may be unavailable.[/]")
+        return
+
+    if _dns_resolves():
+        console.print("[green]DNS auto-fix worked — resolution restored.[/]")
+    else:
+        console.print("[red]DNS auto-fix did not restore resolution. "
+                      "Tunnel/Telegram connectivity may be unavailable.[/]")
+
+
 def main() -> int:
     console.print(Panel(
         "[bold cyan]🌌 COSMIC PUNK TRADING SYSTEM[/]\n[dim]Starting all services…[/]",
         border_style="cyan"))
+
+    _ensure_dns_resolves()
 
     # 1. Dashboard server
     console.print("[cyan]1/3 Starting dashboard server…[/]")
@@ -76,7 +113,19 @@ def main() -> int:
                 break
             match = re.search(r"https://\S+\.trycloudflare\.com", line or "")
             if match:
-                tunnel_url = match.group(0)
+                candidate = match.group(0)
+                # cloudflared's own API host (api.trycloudflare.com) is not a
+                # per-tunnel subdomain — it surfaces here when DNS failed
+                # mid-setup and the CLI fell back to printing its own API
+                # base URL instead of a real tunnel hostname. Treating it as
+                # a working public URL would show a link that 404s.
+                if re.fullmatch(r"https://api\.trycloudflare\.com(/.*)?", candidate):
+                    console.print(
+                        "[yellow]⚠️ Tunnel failed (network issue) — dashboard only "
+                        f"reachable at http://localhost:{settings.dashboard_port} "
+                        "until network recovers[/]")
+                    break
+                tunnel_url = candidate
                 break
     except FileNotFoundError:
         console.print("[yellow]cloudflared not installed — skipping tunnel (local only).[/]")
