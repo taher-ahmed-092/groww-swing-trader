@@ -90,6 +90,14 @@ class ForwardSimulator:
 
         return {"updated": updated, "wins": wins, "losses": losses}
 
+    def rejection_outcomes(self) -> dict:
+        """Filled simulations grouped by rejection reason — see
+        src/analytics/filter_value.py for which gates protect money and
+        which only block winners."""
+        from src.analytics.filter_value import rejection_reason_value
+
+        return rejection_reason_value(self.journal.get_simulations(limit=5000))
+
     def get_simulation_insights(self) -> dict:
         completed = [s for s in self.journal.get_simulations() if s.would_have_won is not None]
         if len(completed) < 10:

@@ -566,6 +566,7 @@ def _startup_stale_position_check() -> None:
     alerts + immediately prices/closes-if-due any open real position that
     went unmonitored because the process wasn't running. Does NOT wait for
     the next scheduled daily_postmarket_job, which could be up to 24h away."""
+    from src.memory.journal import CLOSE_REASON_STALE_CATCHUP
     from src.risk.checker import STALE_POSITION_MAX_HOLD_DAYS, find_stale_open_positions
 
     stale = find_stale_open_positions()
@@ -597,7 +598,8 @@ def _startup_stale_position_check() -> None:
         if not (hit_stop or hit_target):
             continue
 
-        closed = journal.log_closed(trade.id, price)
+        closed = journal.log_closed(trade.id, price,
+                                    close_reason=CLOSE_REASON_STALE_CATCHUP)
         reflector.reflect(closed)
         notifier.send_message(
             f"{'🎯' if hit_target else '🛑'} Closed {trade.symbol} @ ₹{price:.2f} "
@@ -893,9 +895,7 @@ def weekly_agent_evaluation_job() -> None:
 
 def intraday_entry_job() -> None:
     """Mon-Fri 9:30 AM — open 3-5 intraday learning simulations on real NSE data."""
-    from src.risk.checker import is_daily_loss_halted
-
-    if _kill_switch() or _is_paused() or is_daily_loss_halted():
+    if _kill_switch() or _is_paused():
         return
     from src.learning.intraday_simulator import IntradaySimulator
 
@@ -1234,6 +1234,31 @@ def forced_close_job() -> None:
             _broadcast_trade_event_safe("TRADE_CLOSED", t)
 
 
+def explorer_trade_job() -> None:
+    """Every 15 minutes — EXPLORER opens unfiltered control-group positions
+    (src/trading/explorer.py). Simulation store only; no Telegram spam."""
+    if _kill_switch() or _is_paused():
+        return
+    from src.trading.explorer import ExplorerTrader
+
+    placed = ExplorerTrader().place_entries()
+    if placed:
+        console.print(f"[cyan][EXPLORER] opened {len(placed)} unfiltered positions[/cyan]")
+
+
+def explorer_close_job() -> None:
+    """Every 15 minutes (offset) — close EXPLORER trades on stop/target/5-day hold."""
+    if _kill_switch():
+        return
+    from src.trading.explorer import ExplorerTrader
+
+    closed = ExplorerTrader().close_open_trades()
+    if closed:
+        wins = sum(1 for t in closed if t["outcome"] == "WIN")
+        console.print(f"[cyan][EXPLORER CLOSE] {len(closed)} trades: "
+                      f"{wins}W/{len(closed) - wins}L[/cyan]")
+
+
 _CONT_SIM_BACKOFF_UNTIL = 0.0  # epoch seconds; 0 = no backoff pending
 
 
@@ -1475,6 +1500,8 @@ if __name__ == "__main__":
     scheduler.add_job(_job(rf_train_job, "rf_train"), "cron", day_of_week="sun", hour=21, minute=30)
     scheduler.add_job(_job(_with_marker(forced_trade_job, "forced_trade"), "forced_trade"), "cron", minute="*/15")
     scheduler.add_job(_job(forced_close_job, "forced_close"), "cron", minute="7,22,37,52")
+    scheduler.add_job(_job(explorer_trade_job, "explorer_trade"), "cron", minute="3,18,33,48")
+    scheduler.add_job(_job(explorer_close_job, "explorer_close"), "cron", minute="11,26,41,56")
     scheduler.add_job(_job(daily_forced_summary_job, "daily_forced_summary"), "cron", day_of_week="mon-fri", hour=16, minute=0)
     scheduler.add_job(_job(_with_marker(continuous_sim_job, "continuous_sim"), "continuous_sim"), "cron", minute="*/30")
     scheduler.add_job(_job(drift_check_job, "drift_check"), "cron", hour="*/6")

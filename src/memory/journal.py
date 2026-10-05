@@ -29,6 +29,10 @@ def _now() -> datetime:
 # (see ScoutAgent/HistoricalReplayEngine usage of the same dict). Shared across every
 # entry-snapshot builder (real journal trades, forced/cont-sim/short simulations) so a
 # post-mortem never has to guess which fields were even captured.
+# Closes made by the startup staleness check after the process was down: the
+# loss accrued over days offline, not today, so the daily-loss breaker ignores them.
+CLOSE_REASON_STALE_CATCHUP = "STALE_CATCHUP"
+
 ENTRY_SNAPSHOT_INDICATOR_KEYS = (
     "rsi_14", "adx_14", "adx_signal", "macd", "obv_trend", "supertrend_direction",
     "cmf_20", "ichimoku", "vwap_position", "atr_14", "ma_50", "ma_200",
@@ -119,6 +123,9 @@ class TradeRecord(SQLModel, table=True):
     # fill_price includes tier-based slippage (src/trading/cost_model.py).
     signal_price: Optional[float] = None
     fill_price: Optional[float] = None
+    # Why the position closed when it was NOT a normal monitored exit
+    # (CLOSE_REASON_STALE_CATCHUP); None for ordinary closes.
+    close_reason: Optional[str] = None
 
 
 class DailyJournalEntry(SQLModel, table=True):
@@ -221,6 +228,7 @@ class TradingJournal:
         new_columns = {
             "gross_pnl": "FLOAT", "gross_pnl_pct": "FLOAT",
             "signal_price": "FLOAT", "fill_price": "FLOAT",
+            "close_reason": "VARCHAR",
         }
         try:
             with self.engine.connect() as conn:
@@ -302,7 +310,8 @@ class TradingJournal:
             session.refresh(record)
         return record
 
-    def log_closed(self, trade_id: int, close_price: float) -> TradeRecord:
+    def log_closed(self, trade_id: int, close_price: float,
+                   close_reason: Optional[str] = None) -> TradeRecord:
         with Session(self.engine) as session:
             record = session.get(TradeRecord, trade_id)
             if record is None:
@@ -326,6 +335,7 @@ class TradingJournal:
                 except Exception:
                     pass
             record.outcome = "WIN" if qty_value > 0 else "LOSS"
+            record.close_reason = close_reason
             record.closed_at = _now()
             session.add(record)
             session.commit()

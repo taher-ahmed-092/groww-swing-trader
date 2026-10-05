@@ -55,7 +55,13 @@ _ENGINE_SOURCES = {
                        lambda t: t.get("trade_type") == "HISTORICAL_SIM"),
     "CONTINUOUS_SIM": ("data/cache/continuous_sim_history.json", lambda t: True),
     "SHORT_SIM": ("data/cache/short_trades_history.json", lambda t: True),
+    "EXPLORER": ("data/cache/explorer_history.json", lambda t: True),
 }
+
+# EXPLORER is the unfiltered control group: it gets its own scorecard row but
+# is never throttled or paused (a low PF is the expected finding, not a fault),
+# and its history file is read by no other engine's throttle or headline metric.
+CONTROL_ENGINES = {"EXPLORER"}
 
 # REAL (actual paper-broker fills — TradingJournal, not a JSON cache) is
 # handled separately from _ENGINE_SOURCES: it's real signal-quality evidence,
@@ -181,6 +187,9 @@ class EngineScorecard:
                 # engine — never throttled/paused/retired on early PF. No
                 # throttle-file entry is written, so get_mode("REAL") always
                 # reads back "normal" via its own default.
+                continue
+
+            if engine in CONTROL_ENGINES:
                 continue
 
             n = stats["n_trades"]

@@ -553,6 +553,12 @@ class CommandHandler:
             f"*Best-performing stocks:* {best_text}\n"
             f"*Worst-performing stocks:* {worst_text}\n\n"
             "_/learn full sends LESSONS.md._")
+        try:
+            from src.analytics.filter_value import render_filter_value_section
+
+            self._send(render_filter_value_section())
+        except Exception as exc:
+            self._send(f"🔬 Filter value unavailable: {exc}")
 
     def _cmd_chart(self, args):
         """P&L chart; '/chart wins' for win/loss donut"""
@@ -728,8 +734,9 @@ class CommandHandler:
         trader = AlwaysOnTrader()
         trades = trader.ensure_daily_trades()
         if not trades:
-            self._send(f"Already placed {trader._count_todays_forced_trades()} trades today. "
-                       f"Daily target ({trader.TARGET_DAILY_TRADES}) reached.")
+            self._send("⚠️ No trade placed — "
+                       f"{trader.last_block_message or 'no reason recorded'} "
+                       f"[{trader.last_block_reason or 'unknown'}]")
             return
         for t in trades:
             self._send(

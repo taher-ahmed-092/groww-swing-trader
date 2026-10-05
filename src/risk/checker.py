@@ -18,7 +18,7 @@ from rich.console import Console
 from config.risk_limits import LIMITS
 from config.settings import settings
 from src.data.watchlist import ALL_STOCKS, get_risk_params_for_tier
-from src.memory.journal import TradingJournal
+from src.memory.journal import CLOSE_REASON_STALE_CATCHUP, TradingJournal
 from src.orchestrator.state import TradeState
 from src.risk.position_sizer import PositionSizer
 from src.trading.modes import get_current_mode
@@ -130,9 +130,10 @@ def find_stale_open_positions(journal: TradingJournal | None = None) -> list[dic
 
 
 def is_daily_loss_halted() -> bool:
-    """True if today's cumulative net P&L has already tripped the -6% circuit
-    breaker. All trade-placing jobs (forced/intraday/real) should skip while
-    this is set; it self-clears the moment the date changes."""
+    """True if today's cumulative REAL net P&L has already tripped the -6%
+    circuit breaker. Gates real-money trades only (RiskChecker.check); the
+    forced/intraday/explorer simulations ignore it. Self-clears the moment
+    the date changes."""
     try:
         if not DAILY_LOSS_HALT_FILE.exists():
             return False
@@ -143,7 +144,9 @@ def is_daily_loss_halted() -> bool:
 
 def _todays_real_trades(journal: TradingJournal | None = None) -> list:
     """Today's REAL trades (closed, WIN/LOSS) from TradingJournal only —
-    excludes forced/intraday/short simulation history entirely. Bug fixed:
+    excludes forced/intraday/short simulation history entirely, and stale
+    catch-up closes (loss accrued while the process was down, not today).
+    Bug fixed:
     the circuit breaker previously summed P&L across ALL sources including
     simulations, so simulation losses (not real capital) could halt real
     signal evaluation with 0 real trades ever placed."""
@@ -153,6 +156,7 @@ def _todays_real_trades(journal: TradingJournal | None = None) -> list:
         t for t in j.get_recent(n=200)
         if t.closed_at and t.closed_at.date().isoformat() == today
         and t.outcome in ("WIN", "LOSS")
+        and t.close_reason != CLOSE_REASON_STALE_CATCHUP
     ]
 
 

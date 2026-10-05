@@ -63,20 +63,32 @@ class AlwaysOnTrader:
     def __init__(self) -> None:
         self.journal = TradingJournal()
         self.fetcher = MarketDataFetcher()
+        self.last_block_reason: Optional[str] = None
+        self.last_block_message: str = ""
+
+    def _block(self, reason: str, message: str) -> list[dict]:
+        self.last_block_reason = reason
+        self.last_block_message = message
+        return []
 
     # ── public API ───────────────────────────────────────────────────────────
     def ensure_daily_trades(self) -> list[dict]:
         """Place forced trades until today's count reaches the daily target.
-        Up to 3 per call. Market hours → live forced; otherwise → historical sim."""
-        from src.risk.checker import is_daily_loss_halted
+        Up to 5 per call, market hours only. When nothing is placed,
+        last_block_reason / last_block_message say exactly why. The real-money
+        daily-loss halt deliberately does not apply: these are simulations."""
+        self.last_block_reason, self.last_block_message = None, ""
 
-        if is_daily_loss_halted():
-            return []
         placed_today = self._count_todays_forced_trades()
         if placed_today >= self.MAX_DAILY_TRADES:
-            return []
-        if len(self._load_open_forced_trades()) >= self.MAX_OPEN_FORCED:
-            return []  # let existing positions actually play out before opening more
+            return self._block(
+                "daily_cap", f"Daily cap reached: {placed_today}/{self.MAX_DAILY_TRADES} "
+                             "learning trades already opened today.")
+        open_count = len(self._load_open_forced_trades())
+        if open_count >= self.MAX_OPEN_FORCED:
+            return self._block(
+                "open_cap", f"Open-position cap reached: {open_count}/{self.MAX_OPEN_FORCED} "
+                            "forced positions still open — they must close before new ones open.")
 
         is_market_hours = self._is_market_hours(datetime.now(IST))
 
@@ -87,7 +99,9 @@ class AlwaysOnTrader:
         # history file is kept for learning; no new HISTORICAL_SIM trades
         # are placed off-hours.
         if not is_market_hours:
-            return []
+            return self._block(
+                "market_closed", "Market is closed (NSE Mon-Fri 09:15-15:30 IST) — "
+                                 "live forced entries only run in market hours.")
 
         # Meta-learning: an engine that's been consistently unprofitable over
         # real evidence gets its own entries throttled or paused — the system
@@ -97,7 +111,9 @@ class AlwaysOnTrader:
         engine_name = "LIVE_FORCED"
         engine_mode = EngineScorecard.get_mode(engine_name)
         if engine_mode == "paused":
-            return []
+            return self._block(
+                "engine_paused", "LIVE_FORCED is paused by the engine auto-throttle "
+                                 "(profit factor too low over its recent trades).")
         # Cap per-call volume to avoid rate limits; this gets called every 15 min
         # throughout the day. "probation" (still building current-era evidence
         # post-fix) gets the same half-size treatment as "throttled" — allowed
@@ -121,6 +137,10 @@ class AlwaysOnTrader:
             if trade.get("outcome") not in (None, "OPEN"):
                 self._update_knowledge_from_trade(trade)
                 self._log_simulation_row(trade)
+        if not trades:
+            self._block("no_candidate",
+                        "No candidate produced a valid entry this cycle — sampled stocks "
+                        "failed the entry filter or minimum-move check, or had no price data.")
         return trades
 
     def close_open_forced_trades(self) -> list[dict]:
