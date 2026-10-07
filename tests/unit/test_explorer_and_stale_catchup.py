@@ -114,3 +114,12 @@ def test_rejection_outcomes_group_by_reason_and_skip_forced_rows():
         sim("POOR_RISK_REWARD: net R:R 1.2", True), sim("POOR_RISK_REWARD", False),
         sim("FORCED_LEARNING: x", True), sim("fundamental score 0.3 below min", None)])
     assert out == {"POOR_RISK_REWARD": {"n": 2, "would_win_rate": 0.5, "avg_7d_pct": 2.0}}
+
+
+def test_kill_switch_halts_explorer(explorer, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "KILL_SWITCH").write_text("")
+
+    assert explorer.place_entries() == []
+    assert explorer.last_block_reason == "kill_switch"
+    explorer.fetcher.get_price_history.assert_not_called()

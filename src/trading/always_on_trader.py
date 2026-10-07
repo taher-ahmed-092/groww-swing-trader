@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from config.risk_limits import LIMITS
 from src.agents.technical.indicators import compute_indicators
 from src.data.fetcher import MarketDataFetcher
 from src.data.watchlist import ALL_STOCKS, LARGE_CAP
@@ -79,6 +80,8 @@ class AlwaysOnTrader:
         daily-loss halt deliberately does not apply: these are simulations."""
         self.last_block_reason, self.last_block_message = None, ""
 
+        if Path(LIMITS.kill_switch_file).exists():
+            return self._block("kill_switch", "KILL_SWITCH file present — all execution halted.")
         placed_today = self._count_todays_forced_trades()
         if placed_today >= self.MAX_DAILY_TRADES:
             return self._block(

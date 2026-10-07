@@ -87,3 +87,25 @@ def test_real_money_halt_does_not_block_intraday_entries(monkeypatch):
     runner.intraday_entry_job()
 
     simulator.return_value.run_morning_entries.assert_called_once()
+
+
+def test_kill_switch_halts_forced_trader_and_trade_command_says_so(tmp_path, monkeypatch):
+    trader = _trader(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "KILL_SWITCH").write_text("")
+    monkeypatch.setattr(trader, "_place_live_forced_trade",
+                        lambda: pytest.fail("must not place under KILL_SWITCH"))
+
+    assert trader.ensure_daily_trades() == []
+    assert trader.last_block_reason == "kill_switch"
+
+    monkeypatch.setattr(aot, "AlwaysOnTrader", lambda: trader)
+    handler = CommandHandler.__new__(CommandHandler)
+    handler.tg = MagicMock()
+    handler.tg.chat_id = "1"
+    handler.commands = {}
+    CommandHandler.__init__(handler)
+    sent = []
+    handler._send = sent.append
+    handler._force_now([])
+    assert "KILL_SWITCH" in sent[0] and "[kill_switch]" in sent[0]

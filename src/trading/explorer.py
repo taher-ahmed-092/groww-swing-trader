@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from config.risk_limits import LIMITS
 from src.agents.technical.indicators import compute_indicators
 from src.analytics.filter_value import entry_filter_flags
 from src.data.fetcher import MarketDataFetcher
@@ -54,6 +55,9 @@ class ExplorerTrader:
         """Opens up to ENTRIES_PER_CALL unfiltered positions, bounded by the
         open and daily caps. Market hours only — entry prices are live closes."""
         self.last_block_reason = None
+        if Path(LIMITS.kill_switch_file).exists():
+            self.last_block_reason = "kill_switch"
+            return []
         if not AlwaysOnTrader._is_market_hours(datetime.now(IST)):
             self.last_block_reason = "market_closed"
             return []
